@@ -17,6 +17,7 @@ export interface Activity {
   category?: string;
   status?: string;
   ticket?: number | null; // CRM ticket id, so the CRM links the line to it
+  times?: string[]; // every moment work happened on this item, when the source has more than one
 }
 
 export interface Context {
@@ -24,6 +25,7 @@ export interface Context {
   user: any; // CRM /users/me
   cfg: Config;
   crm: CRMClient;
+  attendanceMinutes?: number | null; // real worked time from the punch card, if they punched in
 }
 
 export interface Source {

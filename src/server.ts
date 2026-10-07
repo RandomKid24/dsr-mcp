@@ -73,7 +73,7 @@ export function createServer() {
     async ({ date }) => deps.crm().crm.today(date));
 
   tool("dsr_generate",
-    "Build a DSR draft from the day's evidence. Returns a draft_id and the readable draft. hours: {source_id: hours} to correct a line's hours. exclude: [source_id] to drop lines. extra: [{activity, project, hours}] for work the user says they did that has no source; it is marked UNVERIFIED. Call dsr_preview next, then show the user the result.",
+    "Build a DSR draft from the day's evidence. Hours are measured automatically from real commit and ticket times (and capped at the user's attendance), so do NOT ask the user about hours. Returns a draft_id and the readable draft. hours: {source_id: hours} only if the user volunteers a correction. exclude: [source_id] to drop lines. extra: [{activity, project, hours}] for work the user says they did that has no source; it is marked UNVERIFIED. Call dsr_preview next, then show the user the result.",
     {
       date: z.string().optional(),
       repos: reposParam,

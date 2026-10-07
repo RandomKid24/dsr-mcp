@@ -7,8 +7,20 @@ Type **`/dsr`** in your AI coding tool (or just say **"create my DSR"**) and it 
 1. You say "create my DSR" (or "what did I do today?").
 2. It looks at **your git commits from today** and **your CRM tickets**, and ignores noise like WIP and merge commits.
 3. It writes a DSR and shows it to you. Every line says where it came from (a commit or a ticket). Nothing is made up. Anything you add by hand is marked UNVERIFIED.
-4. You fix the hours if needed and say "submit it".
+4. The hours are filled in for you from real times (see below). It asks one thing: submit?
 5. It sends it to the CRM. It never submits without your yes, and it never creates duplicates: running it twice just says "already there".
+
+## Where the hours come from
+
+You are never asked for hours. Each line's time is measured from when the work actually happened:
+
+- **Commits:** the times of your commits. Commits less than 90 minutes apart count as one work session (the time between them), and each session gets 20 minutes for the work before its first commit.
+- **Tickets:** the times you commented on, moved or assigned the ticket in the CRM, measured the same way.
+- **Capped by attendance:** the total can't be more than the time you were punched in. If it is, every line is scaled down to fit.
+- **Never padded:** if you worked 7 hours but only 3 are visible in commits and tickets, the DSR shows 3. To add the rest, tell it ("add: client call, 1h"); that line is marked UNVERIFIED.
+- **Tickets with no activity today are left out.** Being assigned a ticket is not work done today.
+
+Times are rounded to 5 minutes (minimum 10 minutes), so you may see lines like 45m or 1h 50m.
 
 ## Install: one command
 
@@ -66,7 +78,7 @@ Say "create my DSR". Your browser opens the CRM sign-in page. Log in with your n
 - `/dsr` (Claude Code, OpenCode). Add words after it if you like: `/dsr yesterday`, `/dsr the billing work was 3 hours`
 - "What did I do today?"
 - "Create my DSR"
-- "Hours for the dsr-mcp line should be 3" (corrections happen in the preview)
+- "Make the dsr-mcp line 2 hours" (only if you disagree with the measured time)
 - "Also add: standup with client, 0.5h" (added as UNVERIFIED)
 - "Submit it"
 - "I already submitted this morning, update it" (it updates instead of duplicating)
@@ -88,7 +100,8 @@ It reads git commits from the folder your AI tool is open in. Open the tool in t
 | Tool says the server failed to start or `npx` not found | Run `which npx` (Windows: `where npx`) and put that full path in the config as the command. Common when Node comes from nvm. |
 | Browser didn't open for sign-in | The AI shows you the link. Open it yourself. |
 | "No activity found" | Open the tool in the project folder, or give the repo path. Only commits made by your own git email are counted, on today's date. |
-| Hours look wrong | Hours from commits are estimates (first to last commit). Correct them before submitting. |
+| Hours look low | Only work with evidence is counted (commits, ticket activity), and never more than your attendance. Say "make X 2 hours" or "add: standup, 30m" to change it. |
+| Hours look high | Lines are capped at your attendance time. If you did not punch in, only the measured time is used. |
 | "Day is closed" | The CRM only accepts today's DSR. Past days are read-only except for admins. |
 | Need to sign in again | Delete `~/.config/dsr-mcp/config.json` and ask again. |
 | Updating to a new version | `npx` caches the old one. Run `rm -rf ~/.npm/_npx` (Windows: delete `%LocalAppData%\npm-cache\_npx`) and restart the tool. |

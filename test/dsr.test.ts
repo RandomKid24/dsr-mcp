@@ -24,7 +24,8 @@ class FakeCRM implements CRMClient {
   async me() { return ME; }
   async projects() { return PROJECTS; }
   async activities() { return this.ticketRows; }
-  async today() { return { date: DAY, exists: this.entries.length > 0, entries: this.entries }; }
+  attendance: { net_minutes: number } | null = null;
+  async today() { return { date: DAY, exists: this.entries.length > 0, attendance: this.attendance, entries: this.entries }; }
   async create(body: any) {
     const dup = this.entries.find((e) => e.source_id === body.source_id);
     if (dup) throw new Conflict(409, { error: "dup", existing: dup });
@@ -76,17 +77,18 @@ describe("sources and drafting", () => {
     assert.equal(e.product, 7);
     assert.match(e.source_id, /^dsr-repo-.*:2026-10-07$/);
     assert.ok(!e.task_name.includes("WIP"));
-    assert.equal(e.hours_spent, 2); // 09:00 to 11:00
+    assert.equal(e.hours_spent, 0.67); // two sessions two hours apart: 20 + 20 minutes of measured work
     assert.equal(e.evidence.length, 2);
   });
 
   test("CRM tickets are their own lines, linked to the ticket", async () => {
     const row = { activity: "CRM-007 Vulnerability report: Moved it to in progress", project: "CRM", source_id: "CRM-007", ticket: 55,
-      timestamp: `${DAY}T10:00:00+05:30`, suggested_hours: "1.50", category: "bug_fix", status: "in_progress" };
+      timestamp: `${DAY}T10:40:00+05:30`, suggested_hours: "1.00", category: "bug_fix", status: "in_progress", touched: true,
+      events: [`${DAY}T10:00:00+05:30`, `${DAY}T10:40:00+05:30`] };
     const ctx = ctxFor(new FakeCRM([row]));
     const { found } = await core.collect(ctx);
     const e = core.buildDraft(ctx, found, PROJECTS).entries[0];
-    assert.deepEqual([e.ticket, e.product, e.hours_spent, e.status], [55, 7, 1.5, "in_progress"]);
+    assert.deepEqual([e.ticket, e.product, e.hours_spent, e.status], [55, 7, 1, "in_progress"]); // 20 lead + 40 between events
   });
 
   test("a failing source is reported, not fatal", async () => {
@@ -106,6 +108,45 @@ describe("sources and drafting", () => {
   });
 });
 
+describe("real time", () => {
+  const at = (hhmm: string) => `${DAY}T${hhmm}:00+05:30`;
+
+  test("activeMinutes: one session counts the gaps plus a lead; a long pause starts a new session", () => {
+    assert.equal(core.activeMinutes([]), 0);
+    assert.equal(core.activeMinutes([at("10:00")]), 20);
+    assert.equal(core.activeMinutes([at("10:00"), at("10:30"), at("11:00")]), 80);
+    assert.equal(core.activeMinutes([at("10:00"), at("14:00")]), 40);
+    assert.equal(core.activeMinutes([at("11:00"), at("10:00")]), 80); // an hour apart: 20 + 60; order does not matter
+  });
+
+  test("tickets with no activity today are left out", async () => {
+    const row = (id: string, touched: boolean) => ({ activity: `${id} T: x`, project: "CRM", source_id: id, ticket: 1, timestamp: touched ? at("10:00") : null,
+      suggested_hours: "1.00", category: "other", status: "in_progress", touched, events: touched ? [at("10:00")] : [] });
+    const ctx = ctxFor(new FakeCRM([row("CRM-1", true), row("CRM-2", false)]));
+    const { found } = await core.collect(ctx);
+    assert.deepEqual(found.map((a) => a.sourceId), ["CRM-1"]);
+  });
+
+  test("measured time is shrunk to fit attendance, and never inflated to fill it", () => {
+    const acts = [
+      act("CRM-1 A: x", "CRM-1", { times: [at("09:00"), at("10:00")] }), // 80 min
+      act("CRM-2 B: y", "CRM-2", { times: [at("11:00"), at("12:00")] }), // 80 min
+    ];
+    const roomy = core.buildDraft({ ...ctxFor(new FakeCRM()), attendanceMinutes: 480 }, acts, PROJECTS);
+    assert.deepEqual(roomy.entries.map((e) => e.hours_spent), [1.33, 1.33]); // a whole day on attendance, still only what was measured
+    assert.equal(roomy.scaledDown, false);
+    const tight = core.buildDraft({ ...ctxFor(new FakeCRM()), attendanceMinutes: 80 }, acts, PROJECTS);
+    assert.deepEqual(tight.entries.map((e) => e.hours_spent), [0.67, 0.67]); // 160 measured, 80 on attendance
+    assert.equal(tight.scaledDown, true);
+    assert.match(core.render(tight, ME), /scaled down to fit/);
+  });
+
+  test("a hour the user volunteers wins over the measurement", () => {
+    const draft = core.buildDraft(ctxFor(new FakeCRM()), [act("CRM-1 A: x", "CRM-1", { times: [at("09:00")] })], PROJECTS, { hours: { "CRM-1": 2 } });
+    assert.equal(draft.entries[0].hours_spent, 2);
+  });
+});
+
 describe("MCP tools", () => {
   let crm: FakeCRM;
   let client: Client;
@@ -115,7 +156,8 @@ describe("MCP tools", () => {
   };
 
   beforeEach(async () => {
-    crm = new FakeCRM([{ activity: "CRM-1 A: x", project: "CRM", source_id: "CRM-1", ticket: 1, timestamp: null, suggested_hours: "1.00", category: "other", status: "completed" }]);
+    crm = new FakeCRM([{ activity: "CRM-1 A: x", project: "CRM", source_id: "CRM-1", ticket: 1, timestamp: null, suggested_hours: "1.00", category: "other", status: "completed",
+      touched: true, events: [`${DAY}T10:00:00+05:30`, `${DAY}T10:30:00+05:30`] }]);
     server.deps.crm = () => ({ crm, cfg: { url: "", token: "", repos: [] } });
     server.DRAFTS.clear();
     const [a, b] = InMemoryTransport.createLinkedPair();
@@ -137,7 +179,7 @@ describe("MCP tools", () => {
     assert.equal(crm.entries.length, 0);
     assert.equal((await call("dsr_submit", { draft_id, confirmed: true })).results[0].result, "created");
     assert.equal(crm.entries.length, 1);
-    assert.equal(crm.entries[0].hours_spent, "1.00");
+    assert.equal(crm.entries[0].hours_spent, "0.83"); // 20 + 30 minutes, measured, nobody was asked
   });
 
   test("submitting twice never duplicates, and update_existing overwrites", async () => {

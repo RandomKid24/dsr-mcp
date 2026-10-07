@@ -9,8 +9,8 @@ ${MARKER}
 Create my Daily Status Report with the dsr MCP tools. $ARGUMENTS
 
 1. Call dsr_get_existing. If a DSR is already filed for the day, tell me what is in it.
-2. Call dsr_generate (use the date if I gave one; if no project folder is open, pass the repo path in \`repos\`), then dsr_preview, and show me the whole draft.
-3. Ask me to confirm, correct hours, drop lines, or add work. Anything I add that has no source stays marked unverified. Call dsr_generate again if I change something.
+2. Call dsr_generate (use the date if I gave one; if no project folder is open, pass the repo path in \`repos\`), then dsr_preview, and show me the whole draft. The hours are already measured from real commit and ticket times, so do not ask me about hours.
+3. Ask me one thing: should I submit it? If I volunteer a change (drop a line, correct hours, add work), call dsr_generate again with it. Work I add that has no source stays marked unverified.
 4. Call dsr_submit with confirmed=true ONLY after I clearly say to submit. Never submit on your own.
 5. If the CRM already has some lines, ask me before using update_existing.
 6. Finish by saying what was created or updated.

@@ -18,15 +18,24 @@ export interface Entry {
   task_name: string; category: string; status: string; hours_spent: number; notes: string;
   source: string; source_id: string; ticket: number | null; product: number | null; project: string;
   evidence: Evidence[];
+  minutes: number | null; // measured from real timestamps; null when the user gave the hours
 }
-export interface Draft { id: string; date: string; entries: Entry[]; warnings: string[]; previewed: boolean }
+export interface Draft {
+  id: string; date: string; entries: Entry[]; warnings: string[]; previewed: boolean;
+  attendanceMinutes: number | null; // the day's real worked time from attendance
+  scaledDown: boolean; // measured time was more than attendance, so it was shrunk to fit
+}
 export interface Project { id: number; key: string; name: string }
 
+/** 1.5 -> "1h 30m" */
+const fmt = (h: number) => { const m = Math.round(h * 60); return m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}` : `${m}m`; };
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export async function makeContext(crm: CRMClient, cfg: Config, date?: string): Promise<Context> {
   const me = await crm.me();
-  return { date: date || me.today, user: me, cfg, crm };
+  const day = date || me.today;
+  const attendanceMinutes: number | null = (await crm.today(day)).attendance?.net_minutes ?? null;
+  return { date: day, user: me, cfg, crm, attendanceMinutes };
 }
 
 /** Every source's activity for the day. A source that fails is reported, not fatal. */
@@ -50,15 +59,26 @@ export async function collect(ctx: Context, sources: Record<string, Source> = SO
   return { found, errors };
 }
 
-/** Hours from the span between the first and last timestamp, in quarters, 0.5 to 4.
- *  A guess to prefill the preview, never a record; one point in time gets a flat hour. */
-function quarters(stamps: string[]): number {
-  const times = stamps.filter(Boolean).map((s) => Date.parse(s)).sort((a, b) => a - b);
-  if (times.length < 2) return 1;
-  const minutes = (times[times.length - 1] - times[0]) / 60000;
-  if (minutes < 15) return 1;
-  return Math.min(4, Math.max(0.5, Math.round(minutes / 15) / 4));
+const SESSION_GAP_MIN = 90; // a longer pause than this ends a work session
+const LEAD_MIN = 20; // time spent before the first commit/event of a session
+const MIN_MINUTES = 10;
+
+/** Minutes of real work shown by a list of timestamps (the way git-hours does it): events closer
+ *  than SESSION_GAP_MIN belong to one session and count the time between them, and each session
+ *  gets LEAD_MIN for the work before its first event. A measurement from real times, not a guess
+ *  at a round number. */
+export function activeMinutes(stamps: string[]): number {
+  const t = stamps.filter(Boolean).map((x) => Date.parse(x)).filter((x) => !Number.isNaN(x)).sort((a, b) => a - b);
+  if (!t.length) return 0;
+  let minutes = LEAD_MIN;
+  for (let i = 1; i < t.length; i++) {
+    const gap = (t[i] - t[i - 1]) / 60000;
+    minutes += gap <= SESSION_GAP_MIN ? gap : LEAD_MIN;
+  }
+  return minutes;
 }
+
+const toHours = (minutes: number) => round2(Math.max(MIN_MINUTES, Math.round(minutes / 5) * 5) / 60);
 
 const category = (text: string) => CATEGORY.find(([rx]) => rx.test(text))?.[1] ?? "other";
 
@@ -98,7 +118,7 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
       e = {
         task_name: `${first.group}: ${subjects.slice(0, 3).join("; ")}${more}`.slice(0, 255),
         category: category(subjects.join(" ")), status: "completed",
-        hours_spent: quarters(acts.map((a) => a.timestamp)),
+        hours_spent: 0, minutes: activeMinutes(acts.map((a) => a.timestamp)),
         notes: "Commits: " + acts.map((a) => a.sourceId.split("@").pop()).join(", "),
         source: "git", source_id: `${first.group}:${ctx.date}`, ticket: null, product: null, project: "", evidence,
       };
@@ -106,7 +126,7 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
       e = {
         task_name: first.activity.split(":")[0].slice(0, 255),
         category: first.category ?? "other", status: first.status ?? "completed",
-        hours_spent: first.hours || 1,
+        hours_spent: 0, minutes: activeMinutes(first.times ?? [first.timestamp]),
         notes: first.activity.includes(": ") ? first.activity.split(": ").slice(1).join(": ") : first.activity,
         source: first.source, source_id: first.sourceId, ticket: first.ticket ?? null, product: null, project: "", evidence,
       };
@@ -122,7 +142,7 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
     const product = projectId(x.project, "", projects);
     entries.push({
       task_name: x.activity.slice(0, 255), category: x.category ?? "other", status: x.status ?? "completed",
-      hours_spent: x.hours ?? 1, notes: "Added by the user; no source.", source: "manual",
+      hours_spent: x.hours ?? 1, minutes: null, notes: "Added by the user; no source.", source: "manual",
       source_id: `manual:${ctx.date}:${digest}`, ticket: null, product,
       project: projects.find((p) => p.id === product)?.name ?? x.project ?? "", evidence: [],
     });
@@ -130,11 +150,19 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
 
   const drop = new Set(opts.exclude ?? []);
   entries = entries.filter((e) => !drop.has(e.source_id));
+  // Measured lines can't add up to more than the day they happened in: shrink them to fit attendance.
+  // Never the other way: time nobody can show evidence for is left unreported, not invented.
+  const measured = entries.filter((e) => e.minutes !== null && opts.hours?.[e.source_id] === undefined);
+  const total = measured.reduce((n, e) => n + (e.minutes as number), 0);
+  const cap = ctx.attendanceMinutes ?? null;
+  const factor = cap !== null && total > cap && total > 0 ? cap / total : 1;
   for (const e of entries) {
     const fixed = opts.hours?.[e.source_id];
-    e.hours_spent = round2(fixed ?? e.hours_spent);
+    if (fixed !== undefined) e.hours_spent = round2(fixed);
+    else if (e.minutes !== null) e.hours_spent = toHours(e.minutes * factor);
+    else e.hours_spent = round2(e.hours_spent);
   }
-  return { id: randomUUID().slice(0, 8), date: ctx.date, entries, warnings, previewed: false };
+  return { id: randomUUID().slice(0, 8), date: ctx.date, entries, warnings, previewed: false, attendanceMinutes: cap, scaledDown: factor < 1 };
 }
 
 export function render(draft: Draft, user: any): string {
@@ -144,10 +172,13 @@ export function render(draft: Draft, user: any): string {
     total += e.hours_spent;
     const proof = e.evidence.length ? `${e.source} ${e.source_id}` : "UNVERIFIED, no source";
     lines.push(`${i + 1}. [${e.project || "no project"}] ${e.task_name}`);
-    lines.push(`   ${e.hours_spent.toFixed(2)}h, ${e.status.replace(/_/g, " ")}, ${e.category.replace(/_/g, " ")}  (${proof})`);
+    lines.push(`   ${fmt(e.hours_spent)}, ${e.status.replace(/_/g, " ")}, ${e.category.replace(/_/g, " ")}  (${proof})`);
     for (const ev of e.evidence.slice(0, 5)) lines.push(`     - ${ev.activity}  [${ev.sourceId}]`);
   });
-  lines.push("", `Total: ${total.toFixed(2)}h (hours from commits are estimates; tell me the right ones)`);
+  lines.push("", `Total: ${fmt(total)}`);
+  lines.push(draft.attendanceMinutes !== null
+    ? `Time is measured from your commit and ticket times. Attendance today: ${fmt(draft.attendanceMinutes / 60)}${draft.scaledDown ? " (measured time was more than this, so it was scaled down to fit)" : ""}.`
+    : "Time is measured from your commit and ticket times. No attendance punch was found for this day.");
   for (const w of draft.warnings) lines.push(`Note: ${w}`);
   return lines.join("\n");
 }
