@@ -37,6 +37,12 @@ class FakeCRM:
         return e
 
 
+@pytest.fixture(autouse=True)
+def _empty_cwd(tmp_path_factory, monkeypatch):
+    """With no repos configured the git source reads the current folder; keep it from reading this repo."""
+    monkeypatch.chdir(tmp_path_factory.mktemp("cwd"))
+
+
 def make_repo(tmp_path, commits):
     repo = tmp_path / "crm"
     repo.mkdir()
@@ -148,3 +154,14 @@ def test_crm_errors_come_back_as_data_not_crashes(monkeypatch):
         raise CRMError(0, "Not signed in.")
     monkeypatch.setattr(server, "_crm", broken)
     assert "Not signed in" in server.dsr_get_user()["error"]
+
+
+def test_setup_registers_with_installed_clients_and_skips_login_when_signed_in(monkeypatch, capsys):
+    from dsr_mcp import cli
+    calls = []
+    monkeypatch.setattr(cli.config, "load", lambda: {"url": "https://crm.x", "token": "t", "repos": []})
+    monkeypatch.setattr(cli.shutil, "which", lambda n: f"/bin/{n}" if n in ("claude", "uvx") else None)
+    monkeypatch.setattr(cli.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    cli.setup("https://crm.x")  # a token exists, so no browser login is attempted
+    assert calls == [["claude", "mcp", "add", "dsr", "--scope", "user", "--", "/bin/uvx", "--from", cli.SPEC, "dsr-mcp"]]
+    assert "Claude Code: registered" in capsys.readouterr().out

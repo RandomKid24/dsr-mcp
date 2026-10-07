@@ -4,28 +4,27 @@ An MCP server that writes your Daily Status Report from work you actually did (g
 
 Say "what did I do today?", "create my DSR", then "submit it".
 
-## Install
+## Install (one command)
+
+Needs [uv](https://docs.astral.sh/uv/) and access to this repo. Install uv with `curl -LsSf https://astral.sh/uv/install.sh | sh` (macOS/Linux) or `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"` (Windows).
+
+```bash
+uvx --from git+https://github.com/RandomKid24/dsr-mcp dsr-mcp setup --url https://crm.beforth.in
+```
+
+It opens your browser to sign in once, stores your token in `~/.config/dsr-mcp/config.json` (mode 600), and registers the server with Claude Code and Codex if they are installed. For OpenCode and Kiro it prints the config to paste. Restart your AI tool, then say "create my DSR".
+
+Update: `uvx --refresh --from git+https://github.com/RandomKid24/dsr-mcp dsr-mcp --help`, then restart your AI tool.
+
+### Manual install (without uv)
 
 ```bash
 git clone https://github.com/RandomKid24/dsr-mcp.git && cd dsr-mcp
 python3 -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/dsr-mcp login --url https://crm.beforth.in    # opens your browser once, stores a token
+.venv/bin/dsr-mcp setup --url https://crm.beforth.in
 ```
 
-The token is saved to `~/.config/dsr-mcp/config.json` (mode 600). Or skip `login` and set `CRM_URL` and `CRM_TOKEN`.
-
-## Register it (use absolute paths)
-
-```bash
-claude mcp add dsr --scope user -- /ABS/PATH/dsr-mcp/.venv/bin/dsr-mcp
-codex mcp add dsr -- /ABS/PATH/dsr-mcp/.venv/bin/dsr-mcp
-```
-
-OpenCode (`opencode.json`): `{"mcp": {"dsr": {"type": "local", "command": ["/ABS/PATH/dsr-mcp/.venv/bin/dsr-mcp"]}}}`
-
-Kiro (`.kiro/settings/mcp.json`): `{"mcpServers": {"dsr": {"command": "/ABS/PATH/dsr-mcp/.venv/bin/dsr-mcp"}}}`
-
-Config formats change between releases; check each client's docs if one fails.
+Or skip sign-in and set `CRM_URL` and `CRM_TOKEN`. Other clients: run the server command `/ABS/PATH/dsr-mcp/.venv/bin/dsr-mcp` over stdio.
 
 ## Which repos are read
 
