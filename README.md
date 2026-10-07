@@ -89,6 +89,22 @@ Every tool starts the server with the same thing: command `npx`, arguments `-y g
   ```
 - **Windows:** if a tool can't start `npx`, use `cmd` as the command and `/c npx -y github:RandomKid24/dsr-mcp` as the arguments.
 
+## Updating to a new version
+
+When a new version is released, do this on **each laptop**:
+
+```bash
+rm -rf ~/.npm/_npx
+npx -y github:RandomKid24/dsr-mcp setup
+```
+
+Then open a new session (or restart the app).
+
+- **Why the first line:** `npx` keeps the copy it downloaded last time. Clearing it makes `npx` fetch the latest version. (Windows: delete the folder `%LocalAppData%\npm-cache\_npx` instead.)
+- **Why running `setup` again:** it installs any new slash commands and registers the server with any new tools. For example, the release that added `/ticket` and `/dsr-ticket` needs this step to install them alongside `/dsr`.
+- **It is safe to repeat.** Your sign-in and settings (`~/.config/dsr-mcp/config.json`) are not touched. Command files that `setup` installed earlier are replaced with the new text; a command file with the same name that you wrote yourself is never overwritten.
+- **Not sure whether you need to update?** If a command or a behaviour described here is missing on your machine, update.
+
 ## First time you use it
 
 Say "create my DSR". Your browser opens the CRM sign-in page. Log in with your normal CRM account, close the tab, and say it again. This happens only once; your token is saved in `~/.config/dsr-mcp/config.json` (readable only by you). Each person signs in as themselves, so the DSR goes under the right name.
@@ -124,7 +140,7 @@ It reads git commits from the folder your AI tool is open in. Open the tool in t
 | Hours look high | Lines are capped at your attendance time. If you did not punch in, only the measured time is used. |
 | "Day is closed" | The CRM only accepts today's DSR. Past days are read-only except for admins. |
 | Need to sign in again | Delete `~/.config/dsr-mcp/config.json` and ask again. |
-| Updating to a new version | `npx` caches the old one. Run `rm -rf ~/.npm/_npx` (Windows: delete `%LocalAppData%\npm-cache\_npx`) and restart the tool. |
+| Updating to a new version | See [Updating to a new version](#updating-to-a-new-version): clear the `npx` cache, then run `setup` again. |
 
 ## For developers
 
