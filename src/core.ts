@@ -248,7 +248,7 @@ export function render(draft: Draft, user: any): string {
   let total = 0;
   draft.entries.forEach((e, i) => {
     total += e.hours_spent;
-    const proof = e.evidence.length ? `${e.source} ${e.source_id}` : "UNVERIFIED, no source";
+    const proof = e.evidence.length ? `${e.source} ${e.source_id}` : `UNVERIFIED, no source (${e.source_id})`;
     lines.push(`${i + 1}. [${e.project || "no project"}] ${e.task_name}`);
     lines.push(`   ${fmt(e.hours_spent)}, ${e.status.replace(/_/g, " ")}, ${e.category.replace(/_/g, " ")}  (${proof})`);
     for (const ev of e.evidence.slice(0, 5)) lines.push(`     - ${ev.activity}  [${ev.sourceId}]`);
