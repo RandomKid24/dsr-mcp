@@ -248,4 +248,19 @@ describe("setup", () => {
     assert.ok(fs.existsSync(path.join(home, ".kiro", "settings", "mcp.json")));
     assert.ok(!fs.existsSync(path.join(home, ".cursor"))); // not installed, so not created
   });
+
+  test("installs /dsr for Claude Code and OpenCode, and never overwrites someone else's file", async () => {
+    const { commandTargets, installCommand } = await import("../src/setup.ts");
+    const home = homeWith(".claude", ".config/opencode");
+    const [claude, opencode] = commandTargets(home);
+    assert.equal(installCommand(claude), "installed");
+    assert.equal(installCommand(opencode), "installed");
+    assert.match(fs.readFileSync(claude.file, "utf8"), /dsr_submit with confirmed=true ONLY after/);
+    assert.ok(claude.file.endsWith(path.join("commands", "dsr.md")));
+    assert.equal(installCommand(claude), "installed"); // ours, so it refreshes
+    fs.writeFileSync(opencode.file, "my own /dsr");
+    assert.match(installCommand(opencode), /^skipped/);
+    assert.equal(fs.readFileSync(opencode.file, "utf8"), "my own /dsr");
+  });
 });
+

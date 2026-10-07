@@ -1,6 +1,6 @@
 # dsr-mcp
 
-Tell your AI coding tool **"create my DSR"** and it writes your Daily Status Report from the work you actually did, shows it to you, and submits it to the BeForth CRM after you say yes.
+Type **`/dsr`** in your AI coding tool (or just say **"create my DSR"**) and it writes your Daily Status Report from the work you actually did, shows it to you, and submits it to the BeForth CRM after you say yes.
 
 ## How it works
 
@@ -22,7 +22,9 @@ npx -y github:RandomKid24/dsr-mcp setup
 
 It finds the AI tools on your computer and adds the DSR server to each one: Claude Code, Codex, OpenCode, Kiro, Cursor, Windsurf, Gemini CLI and the Claude Desktop chat. It leaves your existing settings alone (it keeps a `.dsr-backup` copy of any file it edits), skips tools you don't have, and is safe to run twice.
 
-Then **open a new session** (or restart the app) and say "create my DSR". Sessions that were already open won't see it.
+Then **open a new session** (or restart the app) and type `/dsr`. Sessions that were already open won't see it.
+
+`setup` also adds a `/dsr` command to Claude Code (`~/.claude/commands/dsr.md`) and OpenCode (`~/.config/opencode/commands/dsr.md`). MCP servers can't be given a `/dsr` name themselves (tools never appear in the `/` menu, and MCP prompts are forced to look like `/mcp__dsr__something`), so this small file is what gives you the short command. A file with that name that you wrote yourself is never overwritten. In Codex and other tools, say "create my DSR" in plain words.
 
 ### Terminal and app: is one install enough?
 
@@ -61,6 +63,7 @@ Say "create my DSR". Your browser opens the CRM sign-in page. Log in with your n
 
 ## Using it
 
+- `/dsr` (Claude Code, OpenCode). Add words after it if you like: `/dsr yesterday`, `/dsr the billing work was 3 hours`
 - "What did I do today?"
 - "Create my DSR"
 - "Hours for the dsr-mcp line should be 3" (corrections happen in the preview)
@@ -80,6 +83,7 @@ It reads git commits from the folder your AI tool is open in. Open the tool in t
 
 | Problem | Fix |
 |---|---|
+| `/dsr` is missing from the `/` menu | Run `npx -y github:RandomKid24/dsr-mcp setup` again, then open a new session. Say "create my DSR" in tools without it. |
 | `dsr` is not in the tool's MCP list | Open a **new** session or restart the app. Already-open sessions load their tools once at the start. |
 | Tool says the server failed to start or `npx` not found | Run `which npx` (Windows: `where npx`) and put that full path in the config as the command. Common when Node comes from nvm. |
 | Browser didn't open for sign-in | The AI shows you the link. Open it yourself. |
