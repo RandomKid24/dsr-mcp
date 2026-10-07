@@ -8,7 +8,7 @@ Type **`/dsr`** in your AI coding tool (or just say **"create my DSR"**) and it 
 2. It looks at **your git commits from today** and **your CRM tickets**, and ignores noise like WIP and merge commits.
 3. It writes a DSR and shows it to you. Every line says where it came from (a commit or a ticket). Nothing is made up. Anything you add by hand is marked UNVERIFIED.
 4. The hours are filled in for you from real times (see below). It asks one thing: submit?
-5. It sends it to the CRM. It never submits without your yes, and it never creates duplicates: running it twice just says "already there".
+5. It sends it to the CRM. It never submits without your yes, and it never creates duplicates, and if today's DSR already has entries it checks for overlap and asks you what to do (see below).
 
 ## Where the hours come from
 
@@ -21,6 +21,17 @@ You are never asked for hours. Each line's time is measured from when the work a
 - **Tickets with no activity today are left out.** Being assigned a ticket is not work done today.
 
 Times are rounded to 5 minutes (minimum 10 minutes), so you may see lines like 45m or 1h 50m.
+
+## Running /dsr more than once a day
+
+You can run `/dsr` again after filing one. Before submitting, the new draft is compared with what is already in the CRM for the day:
+
+- **Same work:** the same ticket, or the same commit group. This is never added twice; the existing entry is refreshed in place with the new measurement.
+- **Similar work:** a task name that shares most of its words with an existing entry (for example "Fix export timeout" and "Fixed the export timeout"). Two unrelated tasks in the same project are not treated as similar.
+
+If anything overlaps, nothing is sent until you choose, for the similar lines: **add as separate entries** (different work), **merge** into the existing entry (hours added, the line's name appended to its notes), or **skip**. Lines with no overlap are just added.
+
+If a draft has more than 3 lines, you are also asked once whether to keep one entry per ticket or repo, or **combine into one entry per project** (hours summed). Running it again later updates that combined entry instead of making a new one.
 
 ## Install: one command
 
@@ -81,7 +92,7 @@ Say "create my DSR". Your browser opens the CRM sign-in page. Log in with your n
 - "Make the dsr-mcp line 2 hours" (only if you disagree with the measured time)
 - "Also add: standup with client, 0.5h" (added as UNVERIFIED)
 - "Submit it"
-- "I already submitted this morning, update it" (it updates instead of duplicating)
+- "I already submitted this morning, add what I did since" (it checks for overlap first)
 
 It reads git commits from the folder your AI tool is open in. Open the tool in the project you worked on. In an app with no project open (Claude Desktop), tell it the folder: "my repo is /Users/me/code/crm". To always read several repos, list them once in `~/.config/dsr-mcp/config.json`:
 
@@ -108,7 +119,7 @@ It reads git commits from the folder your AI tool is open in. Open the tool in t
 
 ## For developers
 
-Eight tools: `dsr_get_user`, `dsr_get_projects`, `dsr_get_today`, `dsr_get_existing`, `dsr_generate`, `dsr_preview`, `dsr_submit` (needs `confirmed=true`, and a preview first), `dsr_update` (needs `confirmed=true`).
+Eight tools: `dsr_get_user`, `dsr_get_projects`, `dsr_get_today`, `dsr_get_existing`, `dsr_generate` (`group_by`: `line` or `project`), `dsr_preview` (reports overlaps), `dsr_submit` (needs `confirmed=true`, a preview first, and `on_overlap`: `separate`, `merge` or `skip` when the preview found overlaps), `dsr_update` (needs `confirmed=true`).
 
 ```bash
 git clone https://github.com/RandomKid24/dsr-mcp.git && cd dsr-mcp

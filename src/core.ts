@@ -24,7 +24,11 @@ export interface Draft {
   id: string; date: string; entries: Entry[]; warnings: string[]; previewed: boolean;
   attendanceMinutes: number | null; // the day's real worked time from attendance
   scaledDown: boolean; // measured time was more than attendance, so it was shrunk to fit
+  overlaps: Overlap[]; // lines that match an entry already in the CRM (set by dsr_generate / dsr_preview)
 }
+export type OverlapKind = "same_work" | "similar";
+export interface Overlap { source_id: string; task_name: string; existing_id: number; existing_task: string; kind: OverlapKind; reason: string }
+export type OnOverlap = "separate" | "merge" | "skip";
 export interface Project { id: number; key: string; name: string }
 
 /** 1.5 -> "1h 30m" */
@@ -94,6 +98,7 @@ function projectId(name: string | undefined, group: string, projects: Project[])
 export interface DraftOptions {
   hours?: Record<string, number>;
   exclude?: string[];
+  group_by?: "line" | "project"; // "project": one combined entry per CRM project
   extra?: { activity: string; project?: string; hours?: number; category?: string; status?: string }[];
 }
 
@@ -150,6 +155,7 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
 
   const drop = new Set(opts.exclude ?? []);
   entries = entries.filter((e) => !drop.has(e.source_id));
+  const byProject = opts.group_by === "project";
   // Measured lines can't add up to more than the day they happened in: shrink them to fit attendance.
   // Never the other way: time nobody can show evidence for is left unreported, not invented.
   const measured = entries.filter((e) => e.minutes !== null && opts.hours?.[e.source_id] === undefined);
@@ -162,7 +168,79 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
     else if (e.minutes !== null) e.hours_spent = toHours(e.minutes * factor);
     else e.hours_spent = round2(e.hours_spent);
   }
-  return { id: randomUUID().slice(0, 8), date: ctx.date, entries, warnings, previewed: false, attendanceMinutes: cap, scaledDown: factor < 1 };
+  if (byProject) {
+    // Lines were measured and capped one by one above; now fold them per project. Exclusions and
+    // hour overrides can also name the combined source_id.
+    entries = combineByProject(ctx.date, entries).filter((e) => !drop.has(e.source_id));
+    for (const e of entries) {
+      const fixed = opts.hours?.[e.source_id];
+      if (fixed !== undefined) e.hours_spent = round2(fixed);
+    }
+  }
+  return { id: randomUUID().slice(0, 8), date: ctx.date, entries, warnings, previewed: false, attendanceMinutes: cap, scaledDown: factor < 1, overlaps: [] };
+}
+
+/** Joins names with "; " and fits 255 chars, ending in "(+N more)" when some had to go. */
+function joinNames(prefix: string, names: string[]): string {
+  for (let k = names.length; k >= 1; k--) {
+    const text = `${prefix}${names.slice(0, k).join("; ")}${k < names.length ? ` (+${names.length - k} more)` : ""}`;
+    if (text.length <= 255) return text;
+  }
+  return `${prefix}${names[0]}`.slice(0, 255);
+}
+
+/** One entry per CRM project (no project groups together). Lines the user added by hand stay as they are. */
+function combineByProject(date: string, entries: Entry[]): Entry[] {
+  const out: Entry[] = [];
+  const groups = new Map<number | null, Entry[]>();
+  for (const e of entries) {
+    if (e.source === "manual") { out.push(e); continue; }
+    groups.set(e.product, [...(groups.get(e.product) ?? []), e]);
+  }
+  const combined: Entry[] = [];
+  for (const [product, list] of groups) {
+    const project = list[0].project || "no project";
+    combined.push({
+      task_name: joinNames(`${project}: `, list.map((e) => e.task_name)),
+      category: list[0].category,
+      status: list.some((e) => e.status === "in_progress") ? "in_progress" : "completed",
+      hours_spent: round2(list.reduce((n, e) => n + e.hours_spent, 0)), minutes: null,
+      notes: list.map((e) => e.notes).filter(Boolean).join("; "),
+      source: "mcp", source_id: `project:${product ?? "none"}:${date}`, ticket: null, product, project: list[0].project,
+      evidence: list.flatMap((e) => e.evidence),
+    });
+  }
+  return [...combined, ...out];
+}
+
+const STOP = new Set(["the", "and", "for", "with", "from", "into", "this", "that", "are", "was", "has", "have", "not", "but", "out", "all", "its"]);
+const words = (t: string) => new Set((t.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length >= 3 && !STOP.has(w)));
+
+/** Token overlap of two task names, 0..1. */
+export function similarity(a: string, b: string): number {
+  const x = words(a), y = words(b);
+  if (!x.size || !y.size) return 0;
+  let both = 0;
+  for (const w of x) if (y.has(w)) both++;
+  return both / (x.size + y.size - both);
+}
+
+export const SIMILAR_AT = 0.5;
+
+/** For each draft line that matches an entry already in the CRM: the same work (same ticket or same
+ *  source id, can only be updated) or a similar task name (the user decides). */
+export function findOverlaps(draft: Pick<Draft, "entries">, existing: any[]): Overlap[] {
+  const out: Overlap[] = [];
+  for (const e of draft.entries) {
+    const same = existing.find((x) => (e.ticket !== null && x.ticket === e.ticket) || (x.source === e.source && x.source_id === e.source_id));
+    const mk = (x: any, kind: OverlapKind, reason: string): Overlap =>
+      ({ source_id: e.source_id, task_name: e.task_name, existing_id: x.id, existing_task: x.task_name, kind, reason });
+    if (same) { out.push(mk(same, "same_work", e.ticket !== null && same.ticket === e.ticket ? "same ticket" : "same source")); continue; }
+    let best: any = null, top = 0;
+    for (const x of existing) { const s = similarity(e.task_name, x.task_name ?? ""); if (s > top) { top = s; best = x; } }
+    if (best && top >= SIMILAR_AT) out.push(mk(best, "similar", `task names are ${Math.round(top * 100)}% alike`));
+  }
+  return out;
 }
 
 export function render(draft: Draft, user: any): string {
@@ -188,19 +266,36 @@ const payload = (e: Entry, date: string) => ({
   status: e.status, notes: e.notes, source: e.source, source_id: e.source_id, ticket: e.ticket,
 });
 
-/** Create each line; a line the CRM already has is skipped, or updated when asked. */
-export async function submit(crm: CRMClient, draft: Draft, updateExisting = false) {
-  const done: { task: string; result: string; id: number | null }[] = [];
-  for (const e of draft.entries) {
-    const body = payload(e, draft.date);
-    try {
-      done.push({ task: e.task_name, result: "created", id: (await crm.create(body)).id });
-    } catch (err) {
+/** Send the draft. Lines that overlap an entry already in the CRM follow `onOverlap` (same-work lines
+ *  are refreshed in place unless "skip"). A 409 never creates a duplicate; it is reported as skipped. */
+export async function submit(crm: CRMClient, draft: Draft, onOverlap?: OnOverlap, existing: any[] = []) {
+  const done: { task: string; result: "created" | "updated" | "merged" | "skipped"; id: number | null; why?: string }[] = [];
+  const create = async (e: Entry) => {
+    try { done.push({ task: e.task_name, result: "created", id: (await crm.create(payload(e, draft.date))).id }); }
+    catch (err) {
       if (!(err instanceof Conflict)) throw err;
-      if (!updateExisting) { done.push({ task: e.task_name, result: "already_exists", id: err.existing.id ?? null }); continue; }
-      const { task_name, product, category, hours_spent, status, notes } = body;
-      done.push({ task: e.task_name, result: "updated", id: (await crm.update(err.existing.id, { task_name, product, category, hours_spent, status, notes })).id });
+      done.push({ task: e.task_name, result: "skipped", id: err.existing.id ?? null, why: "the CRM already has it" });
     }
+  };
+  for (const e of draft.entries) {
+    const o = draft.overlaps.find((x) => x.source_id === e.source_id);
+    if (!o) { await create(e); continue; }
+    if (onOverlap === "skip") { done.push({ task: e.task_name, result: "skipped", id: o.existing_id, why: "skipped as asked" }); continue; }
+    if (o.kind === "same_work" || onOverlap === "merge") {
+      const old = existing.find((x) => x.id === o.existing_id);
+      if (o.kind === "same_work") {
+        const { task_name, product, category, hours_spent, status, notes } = payload(e, draft.date);
+        done.push({ task: e.task_name, result: "updated", id: (await crm.update(o.existing_id, { task_name, product, category, hours_spent, status, notes })).id });
+      } else if (old?.notes?.includes(e.task_name)) {
+        done.push({ task: e.task_name, result: "skipped", id: o.existing_id, why: "already merged" }); // a resubmit must not add the hours twice
+      } else {
+        const hours = (parseFloat(old?.hours_spent) || 0) + e.hours_spent;
+        const notes = old?.notes ? `${old.notes}; ${e.task_name}` : e.task_name;
+        done.push({ task: e.task_name, result: "merged", id: (await crm.update(o.existing_id, { hours_spent: hours.toFixed(2), notes })).id });
+      }
+      continue;
+    }
+    await create(e); // similar + "separate": different work
   }
   return done;
 }

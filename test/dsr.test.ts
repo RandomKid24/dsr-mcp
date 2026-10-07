@@ -16,7 +16,7 @@ const DAY = "2026-10-07";
 const ME = { id: 1, username: "dev", name: "Dev", email: "dev@t.local", company: { id: 1, name: "Acme" }, today: DAY };
 const PROJECTS = [{ id: 7, key: "CRM", name: "CRM" }, { id: 8, key: "BIL", name: "Billing" }];
 
-/** Stands in for the HTTP client; remembers entries and answers 409 on a repeated source_id. */
+/** Stands in for the HTTP client; remembers entries and answers 409 on a repeated source_id, ticket or task name. */
 class FakeCRM implements CRMClient {
   entries: any[] = [];
   ticketRows: any[];
@@ -27,7 +27,8 @@ class FakeCRM implements CRMClient {
   attendance: { net_minutes: number } | null = null;
   async today() { return { date: DAY, exists: this.entries.length > 0, attendance: this.attendance, entries: this.entries }; }
   async create(body: any) {
-    const dup = this.entries.find((e) => e.source_id === body.source_id);
+    const dup = this.entries.find((e) => e.source_id === body.source_id || (body.ticket != null && e.ticket === body.ticket)
+      || e.task_name.toLowerCase() === body.task_name.toLowerCase());
     if (dup) throw new Conflict(409, { error: "dup", existing: dup });
     this.entries.push({ ...body, id: this.entries.length + 1 });
     return this.entries.at(-1);
@@ -108,6 +109,33 @@ describe("sources and drafting", () => {
   });
 });
 
+describe("overlap detection", () => {
+  const line = (task: string, extra: Partial<core.Entry> = {}) =>
+    ({ entries: [{ task_name: task, source: "git", source_id: "repo:d", ticket: null, ...extra } as core.Entry] });
+  const row = (task: string, extra: Record<string, unknown> = {}) => ({ id: 9, task_name: task, source: "manual", source_id: "m", ticket: null, ...extra });
+
+  test("same ticket is same_work, even with a different name", () => {
+    const [o] = core.findOverlaps(line("Login fix", { ticket: 5, source: "crm_ticket" }), [row("Totally different", { ticket: 5 })]);
+    assert.deepEqual([o.kind, o.existing_id], ["same_work", 9]);
+  });
+
+  test("same source and source_id is same_work; same source_id from another source is not", () => {
+    assert.equal(core.findOverlaps(line("A thing"), [row("Other words", { source: "git", source_id: "repo:d" })])[0].kind, "same_work");
+    assert.deepEqual(core.findOverlaps(line("Alpha work"), [row("Beta stuff", { source: "mcp", source_id: "repo:d" })]), []);
+  });
+
+  test("similar names overlap", () => {
+    const [o] = core.findOverlaps(line("Fix export timeout"), [row("Fixed the export timeout"), row("Unrelated")]);
+    assert.equal(o.kind, "similar");
+    assert.equal(o.existing_task, "Fixed the export timeout"); // "fixed" != "fix" but export + timeout still reach 2/4
+  });
+
+  test("unrelated tasks in the same project do not overlap", () => {
+    assert.deepEqual(core.findOverlaps(line("CRM: add lead import"), [row("CRM: fix auth redirect"), row("CRM: update the docs for billing")]), []);
+    assert.deepEqual(core.findOverlaps(line("and the for"), [row("the and with")]), []); // only stop words
+  });
+});
+
 describe("real time", () => {
   const at = (hhmm: string) => `${DAY}T${hhmm}:00+05:30`;
 
@@ -182,18 +210,112 @@ describe("MCP tools", () => {
     assert.equal(crm.entries[0].hours_spent, "0.83"); // 20 + 30 minutes, measured, nobody was asked
   });
 
-  test("submitting twice never duplicates, and update_existing overwrites", async () => {
-    const first = (await call("dsr_generate")).draft_id;
-    await call("dsr_preview", { draft_id: first });
-    await call("dsr_submit", { draft_id: first, confirmed: true });
-    const second = (await call("dsr_generate", { hours: { "CRM-1": 4 } })).draft_id;
-    await call("dsr_preview", { draft_id: second });
-    const again = await call("dsr_submit", { draft_id: second, confirmed: true });
-    assert.equal(again.results[0].result, "already_exists");
-    assert.equal(crm.entries.length, 1);
-    const fixed = await call("dsr_submit", { draft_id: second, confirmed: true, update_existing: true });
+  const run = async (args: Record<string, unknown> = {}) => {
+    const id = (await call("dsr_generate", args)).draft_id;
+    const pre = await call("dsr_preview", { draft_id: id });
+    return { id, pre };
+  };
+  const seed = (e: Record<string, unknown>) => crm.entries.push({ id: crm.entries.length + 1, hours_spent: "1.00", notes: "", source: "mcp", source_id: "x", ticket: null, ...e });
+
+  test("submitting twice never duplicates; the same work is refreshed in place", async () => {
+    const first = await run();
+    assert.deepEqual(first.pre.overlaps, []);
+    await call("dsr_submit", { draft_id: first.id, confirmed: true });
+    const second = await run({ hours: { "CRM-1": 4 } });
+    assert.equal(second.pre.overlaps[0].kind, "same_work");
+    assert.equal(second.pre.new_lines.length, 0);
+    assert.match(second.pre.next, /overlap/);
+    assert.match((await call("dsr_submit", { draft_id: second.id, confirmed: true })).error, /overlap/); // blocked until the user chooses
+    const fixed = await call("dsr_submit", { draft_id: second.id, confirmed: true, on_overlap: "separate" });
     assert.equal(fixed.results[0].result, "updated");
+    const again = await call("dsr_submit", { draft_id: second.id, confirmed: true, on_overlap: "separate" });
+    assert.equal(again.results[0].result, "updated");
+    assert.equal(crm.entries.length, 1);
     assert.equal(crm.entries[0].hours_spent, "4.00");
+  });
+
+  test("same_work lines are left alone on skip", async () => {
+    const first = await run();
+    await call("dsr_submit", { draft_id: first.id, confirmed: true });
+    const second = await run({ hours: { "CRM-1": 4 } });
+    assert.equal((await call("dsr_submit", { draft_id: second.id, confirmed: true, on_overlap: "skip" })).results[0].result, "skipped");
+    assert.equal(crm.entries[0].hours_spent, "0.83");
+  });
+
+  describe("similar lines", () => {
+    // CRM-1's task name is "CRM-1 A"; a hand-made entry with a similar name already exists.
+    const similar = (draft: any) => draft.overlaps.find((o: any) => o.kind === "similar");
+    beforeEach(() => {
+      crm.ticketRows[0].activity = "CRM-1 Export report timeout: x";
+      seed({ task_name: "CRM-1 Export report timeout fix", hours_spent: "2.00", notes: "old" });
+    });
+
+    test("blocked until on_overlap is chosen, then separate creates a new entry", async () => {
+      const { id, pre } = await run();
+      assert.equal(similar(pre)?.existing_id, 1);
+      const blocked = await call("dsr_submit", { draft_id: id, confirmed: true });
+      assert.match(blocked.error, /overlap/);
+      assert.deepEqual(Object.keys(blocked.choices), ["separate", "merge", "skip"]);
+      assert.equal(crm.entries.length, 1);
+      assert.equal((await call("dsr_submit", { draft_id: id, confirmed: true, on_overlap: "separate" })).results[0].result, "created");
+      assert.equal(crm.entries.length, 2);
+    });
+
+    test("merge adds the hours and appends the name; a resubmit does not add them twice", async () => {
+      const { id } = await run();
+      const r = await call("dsr_submit", { draft_id: id, confirmed: true, on_overlap: "merge" });
+      assert.equal(r.results[0].result, "merged");
+      assert.equal(crm.entries.length, 1);
+      assert.equal(crm.entries[0].hours_spent, "2.83"); // 2.00 + 0.83 measured
+      assert.equal(crm.entries[0].notes, "old; CRM-1 Export report timeout");
+      assert.equal((await call("dsr_submit", { draft_id: id, confirmed: true, on_overlap: "merge" })).results[0].result, "skipped");
+      assert.equal(crm.entries[0].hours_spent, "2.83");
+    });
+
+    test("skip creates nothing", async () => {
+      const { id } = await run();
+      assert.equal((await call("dsr_submit", { draft_id: id, confirmed: true, on_overlap: "skip" })).results[0].result, "skipped");
+      assert.equal(crm.entries.length, 1);
+      assert.equal(crm.entries[0].hours_spent, "2.00");
+    });
+  });
+
+  test("lines with no overlap never block", async () => {
+    seed({ task_name: "Quarterly planning meeting" });
+    const { id, pre } = await run();
+    assert.deepEqual(pre.overlaps, []);
+    assert.equal(pre.already_in_crm[0].task, "Quarterly planning meeting");
+    assert.equal((await call("dsr_submit", { draft_id: id, confirmed: true })).results[0].result, "created");
+  });
+
+  test("group_by project: one entry per project with summed hours", async () => {
+    crm.ticketRows.push({ activity: "CRM-2 B: y", project: "CRM", source_id: "CRM-2", ticket: 2, timestamp: null, suggested_hours: "1.00", category: "bug_fix", status: "in_progress",
+      touched: true, events: [`${DAY}T12:00:00+05:30`] });
+    crm.ticketRows.push({ activity: "BIL-1 C: z", project: "Billing", source_id: "BIL-1", ticket: 3, timestamp: null, suggested_hours: "1.00", category: "other", status: "completed",
+      touched: true, events: [`${DAY}T12:00:00+05:30`] });
+    const { id } = await run({ group_by: "project" });
+    await call("dsr_submit", { draft_id: id, confirmed: true });
+    assert.equal(crm.entries.length, 2);
+    const crmEntry = crm.entries.find((e) => e.product === 7);
+    assert.equal(crmEntry.source_id, `project:7:${DAY}`);
+    assert.equal(crmEntry.status, "in_progress");
+    assert.equal(crmEntry.ticket, null);
+    assert.equal(crmEntry.hours_spent, "1.16"); // 0.83 + 0.33 (each line rounded first)
+    assert.match(crmEntry.task_name, /^CRM: CRM-1 A; CRM-2 B$/);
+    // running it again updates the same entry
+    const again = await run({ group_by: "project" });
+    assert.ok(again.pre.overlaps.every((o: any) => o.kind === "same_work"));
+    await call("dsr_submit", { draft_id: again.id, confirmed: true, on_overlap: "separate" });
+    assert.equal(crm.entries.length, 2);
+  });
+
+  test("group_by project: exclude and hours override use the combined source_id", () => {
+    const acts = [act("CRM-1 A: x", "CRM-1"), act("CRM-2 B: y", "CRM-2"), act("BIL-1 C: z", "BIL-1", { project: "Billing" })];
+    const ctx = ctxFor(new FakeCRM());
+    const base = core.buildDraft(ctx, acts, PROJECTS, { group_by: "project", hours: { [`project:7:${DAY}`]: 5 }, exclude: [`project:8:${DAY}`] });
+    assert.deepEqual(base.entries.map((e) => [e.source_id, e.hours_spent]), [[`project:7:${DAY}`, 5]]);
+    const dropped = core.buildDraft(ctx, acts, PROJECTS, { group_by: "project", exclude: ["CRM-2"] });
+    assert.match(dropped.entries.find((e) => e.product === 7)!.task_name, /^CRM: CRM-1 A$/);
   });
 
   test("dsr_update needs confirmation", async () => {
