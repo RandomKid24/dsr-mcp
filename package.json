@@ -1,0 +1,22 @@
+{
+  "name": "dsr-mcp",
+  "version": "0.2.0",
+  "description": "MCP server that builds your Daily Status Report from real work (git, CRM tickets) and submits it to the BeForth CRM after you approve it.",
+  "type": "module",
+  "bin": { "dsr-mcp": "dist/cli.js" },
+  "files": ["dist"],
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  }
+}
