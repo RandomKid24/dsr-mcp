@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import * as config from "./config.ts";
 import * as core from "./core.ts";
-import { CRM, CRMError } from "./crm.ts";
+import { CRM, Conflict, CRMError } from "./crm.ts";
 import { startLogin } from "./login.ts";
 
 // ponytail: drafts live in this process (one MCP session). Persist them if a draft must survive a restart.
@@ -152,6 +152,83 @@ export function createServer() {
       const fields = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined && v !== ""));
       if (!Object.keys(fields).length) return { error: "Nothing to change." };
       return deps.crm().crm.update(entry_id, fields);
+    });
+
+  // ---- tickets and projects (work with or without slash commands) ----
+  const link = (t: any) => `${deps.crm().cfg.url}${t.url ?? ""}`;
+  const brief = (t: any) => ({ id: t.id, key: t.key, title: t.title, project: t.product_name, status: t.status, link: link(t) });
+  const ASK = "Show the user the ticket (title, project, status) and ask for a clear yes first; only then call again with confirmed=true.";
+
+  tool("crm_find_tickets",
+    "Search the user's CRM tickets (open by default) by words in the title and/or project, with full links. Use it before creating a ticket to avoid duplicates, and to answer 'do I have a ticket for X?'. Call dsr_get_projects first if you need a project id.",
+    { query: z.string().optional(), product: z.number().optional().describe("Project id from dsr_get_projects"), include_closed: z.boolean().optional() },
+    async ({ query, product, include_closed }) => {
+      const rows = await deps.crm().crm.findTickets({ q: query, product, status: include_closed ? "all" : "open" });
+      return rows.map((t) => ({ ...brief(t), type: t.ticket_type, priority: t.priority, assigned_to_me: t.assigned_to_me }));
+    });
+
+  tool("crm_create_ticket",
+    "Create one CRM ticket assigned to the user. WORKFLOW (also when the user just chats, no slash command): 1) call dsr_get_projects and look at the user's projects; 2) never pick a project silently if more than one could fit, ask; if none fits, ask the user to pick one or to create one (crm_create_project); 3) call crm_find_tickets to avoid duplicates; 4) show the user the title, project and status and ask; 5) only after their explicit yes call this with confirmed=true. Never set confirmed on your own. status: open (default), in_progress, resolved or closed (resolved/closed also log a DSR entry for it in the CRM). If an open ticket with the same title exists, it is returned instead of creating a duplicate; ask whether to use it.",
+    {
+      title: z.string(), product: z.number().describe("Project id from dsr_get_projects"), description: z.string().optional(),
+      ticket_type: z.string().optional(), priority: z.string().optional(), status: z.string().optional(), confirmed: z.boolean().default(false),
+    },
+    async ({ confirmed, ...body }) => {
+      if (!confirmed) return { error: `Not created: the user has not confirmed. Ticket "${body.title}". ${ASK}` };
+      try {
+        const t = await deps.crm().crm.createTicket(Object.fromEntries(Object.entries(body).filter(([, v]) => v !== undefined && v !== "")));
+        return { created: brief(t) };
+      } catch (e) {
+        if (!(e instanceof Conflict)) throw e;
+        return { error: "An open ticket with this title already exists in that project. Ask the user whether to use it instead of creating a new one.", existing: brief(e.existing) };
+      }
+    });
+
+  tool("crm_create_project",
+    "Create a CRM project. Only owners and admins can (dsr_get_user shows can_create_projects). Use it only when no existing project fits (check dsr_get_projects first) and the user agrees. Needs confirmed=true after the user explicitly said yes to this name; never set it on your own.",
+    { name: z.string(), key: z.string().optional().describe("2-6 capitals; the CRM suggests one if omitted"), confirmed: z.boolean().default(false) },
+    async ({ name, key, confirmed }) => {
+      if (!confirmed) return { error: `Not created: the user has not confirmed. Tell the user you want to create the project "${name}" and ask for a clear yes first.` };
+      try {
+        return { created: await deps.crm().crm.createProject(key ? { name, key } : { name }) };
+      } catch (e) {
+        if (e instanceof Conflict) return { error: "A project like this already exists. Use it (dsr_get_projects) instead.", existing: e.existing };
+        if (e instanceof CRMError && e.status === 403) return { error: "Only an owner or admin can create projects. Ask the user to ask an owner or admin of their company to create it." };
+        throw e;
+      }
+    });
+
+  tool("dsr_ticket_from_lines",
+    "Turn chosen lines of a DSR draft (from dsr_generate) into CRM tickets, assigned to the user, and link the lines to them. Only git or manual lines with no ticket and a project qualify. Ask the user which lines first (source_ids are shown in the draft); needs confirmed=true after their explicit yes. A completed line makes a resolved ticket, otherwise in_progress. If an open ticket with the same title exists it is linked instead. The draft changes, so you MUST call dsr_preview again and show it before dsr_submit.",
+    { draft_id: z.string(), source_ids: z.array(z.string()).min(1), confirmed: z.boolean().default(false) },
+    async ({ draft_id, source_ids, confirmed }) => {
+      const draft = DRAFTS.get(draft_id);
+      if (!draft) return { error: "Unknown draft_id. Call dsr_generate first." };
+      if (!confirmed) return { error: "Not created: the user has not confirmed. List the lines and the tickets they would become (title, project, status), ask for a clear yes, then call again with confirmed=true." };
+      const { crm } = deps.crm();
+      const results: Record<string, unknown>[] = [];
+      for (const sid of source_ids) {
+        const e = draft.entries.find((x) => x.source_id === sid);
+        const no = (why: string) => results.push({ source_id: sid, refused: why });
+        if (!e) { no("no such line in this draft"); continue; }
+        if (e.ticket !== null) { no("already has a ticket"); continue; }
+        if (e.source !== "git" && e.source !== "manual") { no("only git or manual lines can become tickets"); continue; }
+        if (e.product === null) { no("it has no project; a project is needed first (pick one or create one with crm_create_project)"); continue; }
+        const title = (e.source === "git" ? e.task_name.replace(/^[^:]*: /, "") : e.task_name).slice(0, 200);
+        const description = e.evidence.length ? e.evidence.map((v) => `- ${v.activity} (${v.sourceId})`).join("\n") : e.notes;
+        let t: any, how: "created" | "linked" = "created";
+        try { t = await crm.createTicket({ title, description, product: e.product, status: e.status === "completed" ? "resolved" : "in_progress", assign_to_me: true }); }
+        catch (err) {
+          if (!(err instanceof Conflict)) throw err;
+          t = err.existing; how = "linked";
+        }
+        e.ticket = t.id;
+        e.task_name = `${t.key} ${t.title ?? title}`.slice(0, 255);
+        results.push({ source_id: sid, key: t.key, link: link(t), [how]: true });
+      }
+      draft.previewed = false;
+      draft.overlaps = [];
+      return { results, next: "The draft changed. Call dsr_preview and show it to the user before dsr_submit." };
     });
 
   return server;

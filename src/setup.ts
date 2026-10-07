@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DSR_COMMAND, MARKER } from "./command.ts";
+import { COMMANDS, MARKER } from "./commands.ts";
 
 // How an MCP client starts the server. Swap for "-y dsr-mcp@latest" once it is published to npm.
 export const SPEC = "github:RandomKid24/dsr-mcp";
@@ -64,18 +64,19 @@ export function mergeJson(t: JsonTarget, cmd: string[]): string {
   return had ? "updated" : "registered";
 }
 
-/** Where each tool keeps user-level slash commands. A file we did not write is never overwritten. */
+/** Where each tool keeps user-level slash commands: one file per command. A file we did not write is never overwritten. */
 export function commandTargets(home = os.homedir()) {
-  return [
-    { name: "Claude Code", detect: path.join(home, ".claude"), file: path.join(home, ".claude", "commands", "dsr.md") },
-    { name: "OpenCode", detect: path.join(home, ".config", "opencode"), file: path.join(home, ".config", "opencode", "commands", "dsr.md") },
+  const dirs = [
+    { name: "Claude Code", detect: path.join(home, ".claude"), dir: path.join(home, ".claude", "commands") },
+    { name: "OpenCode", detect: path.join(home, ".config", "opencode"), dir: path.join(home, ".config", "opencode", "commands") },
   ];
+  return dirs.flatMap((d) => COMMANDS.map((c) => ({ name: `${d.name} /${c.name} command`, detect: d.detect, file: path.join(d.dir, `${c.name}.md`), markdown: c.markdown })));
 }
 
-export function installCommand(t: { file: string }): string {
+export function installCommand(t: { file: string; markdown: string }): string {
   if (fs.existsSync(t.file) && !fs.readFileSync(t.file, "utf8").includes(MARKER)) return `skipped, ${t.file} is yours`;
   fs.mkdirSync(path.dirname(t.file), { recursive: true });
-  fs.writeFileSync(t.file, DSR_COMMAND);
+  fs.writeFileSync(t.file, t.markdown);
   return "installed";
 }
 
@@ -99,9 +100,9 @@ export async function setup(opts: { home?: string } = {}) {
     say(t.name, mergeJson(t, SERVER_COMMAND));
   }
   for (const t of commandTargets(opts.home)) {
-    if (fs.existsSync(t.detect)) say(`${t.name} /dsr command`, installCommand(t));
+    if (fs.existsSync(t.detect)) say(t.name, installCommand(t));
   }
   if (missing.length) console.log(`\nNot found on this machine (paste the block from the README if you use them): ${missing.join(", ")}`);
-  console.log("\nOpen a new session (or restart the app), then type /dsr or say: create my DSR");
+  console.log("\nOpen a new session (or restart the app), then type /dsr, /ticket or /dsr-ticket, or just say: create my DSR");
   console.log("The first time, your browser opens to sign in to the CRM.");
 }

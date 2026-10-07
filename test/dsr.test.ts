@@ -34,6 +34,29 @@ class FakeCRM implements CRMClient {
     return this.entries.at(-1);
   }
   async update(id: number, fields: any) { return Object.assign(this.entries.find((e) => e.id === id), fields); }
+  tickets: any[] = [];
+  canCreateProjects = true;
+  async findTickets(o: any = {}) {
+    return this.tickets.filter((t) => (o.status === "all" || !["resolved", "closed"].includes(t.status))
+      && (o.product === undefined || t.product === o.product) && (!o.q || t.title.toLowerCase().includes(o.q.toLowerCase())));
+  }
+  async createTicket(body: any) {
+    const dup = this.tickets.find((t) => t.product === body.product && t.title.toLowerCase() === body.title.toLowerCase() && !["resolved", "closed"].includes(t.status));
+    if (dup) throw new Conflict(409, { error: "dup", existing: dup });
+    const n = this.tickets.length + 1;
+    const p = PROJECTS.find((x) => x.id === body.product)!;
+    const t = { id: 100 + n, key: `${p.key}-${n}`, title: body.title, product: p.id, product_name: p.name, status: body.status ?? "open",
+      ticket_type: "task", priority: "medium", assigned_to_me: true, url: `/tickets/${100 + n}/` };
+    this.tickets.push(t);
+    // the real CRM logs a DSR entry by itself for a resolved/closed ticket
+    if (["resolved", "closed"].includes(t.status)) this.entries.push({ id: this.entries.length + 1, ticket: t.id, task_name: `${t.key} ${t.title}`, source: "crm_ticket", source_id: t.key, hours_spent: "0.10", notes: "" });
+    return t;
+  }
+  async createProject(body: any) {
+    if (!this.canCreateProjects) throw new CRMError(403, "Only owners and admins can create projects.");
+    if (PROJECTS.some((p) => p.name.toLowerCase() === body.name.toLowerCase())) throw new Conflict(409, { error: "dup", existing: PROJECTS[0] });
+    return { id: 9, key: body.key ?? "NEW", name: body.name };
+  }
 }
 
 function makeRepo(commits: [string, string][]) {
@@ -194,9 +217,9 @@ describe("MCP tools", () => {
     await client.connect(b);
   });
 
-  test("exposes the eight tools", async () => {
+  test("exposes the twelve tools", async () => {
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ["dsr_generate", "dsr_get_existing", "dsr_get_projects", "dsr_get_today", "dsr_get_user", "dsr_preview", "dsr_submit", "dsr_update"]);
+    assert.deepEqual(names, ["crm_create_project", "crm_create_ticket", "crm_find_tickets", "dsr_generate", "dsr_get_existing", "dsr_get_projects", "dsr_get_today", "dsr_get_user", "dsr_preview", "dsr_submit", "dsr_ticket_from_lines", "dsr_update"]);
   });
 
   test("cannot submit without preview or confirmation", async () => {
@@ -341,6 +364,99 @@ describe("MCP tools", () => {
     assert.equal(opened, 1); // a second request while waiting does not open a second tab
   });
 
+  describe("tickets and projects", () => {
+    const extra = [{ activity: "Rework lead import", project: "CRM", hours: 1 }];
+    const lineId = async (draft_id: string, needle: string) => (server.DRAFTS.get(draft_id)!.entries.find((e) => e.task_name.includes(needle)))!.source_id;
+
+    test("crm_find_tickets lists open tickets with full links; closed only on request", async () => {
+      await crm.createTicket({ title: "Login bug", product: 7 });
+      await crm.createTicket({ title: "Old thing", product: 7, status: "closed" });
+      server.deps.crm = () => ({ crm, cfg: { url: "https://crm.x", token: "", repos: [] } });
+      const open = await call("crm_find_tickets", { query: "login" });
+      assert.deepEqual(open.map((t: any) => [t.key, t.link]), [["CRM-1", "https://crm.x/tickets/101/"]]);
+      assert.equal((await call("crm_find_tickets", { include_closed: true })).length, 2);
+    });
+
+    test("crm_create_ticket needs confirmed, answers 409 with the existing ticket", async () => {
+      const args = { title: "Fix export", product: 7 };
+      assert.match((await call("crm_create_ticket", args)).error, /not confirmed/);
+      assert.equal(crm.tickets.length, 0);
+      const ok = await call("crm_create_ticket", { ...args, confirmed: true });
+      assert.equal(ok.created.key, "CRM-1");
+      const dup = await call("crm_create_ticket", { ...args, confirmed: true });
+      assert.match(dup.error, /already exists/);
+      assert.equal(dup.existing.key, "CRM-1");
+      assert.equal(crm.tickets.length, 1);
+    });
+
+    test("crm_create_project needs confirmed; a 403 says to ask an owner or admin", async () => {
+      assert.match((await call("crm_create_project", { name: "Mobile" })).error, /not confirmed/);
+      assert.equal((await call("crm_create_project", { name: "Mobile", confirmed: true })).created.name, "Mobile");
+      assert.match((await call("crm_create_project", { name: "Billing", confirmed: true })).error, /already exists/);
+      crm.canCreateProjects = false;
+      assert.match((await call("crm_create_project", { name: "Other", confirmed: true })).error, /owner or admin/);
+    });
+
+    test("dsr_ticket_from_lines: confirmation gate, then creates, rewrites the line and un-previews", async () => {
+      const { draft_id } = await call("dsr_generate", { extra });
+      await call("dsr_preview", { draft_id });
+      const sid = await lineId(draft_id, "Rework");
+      assert.match((await call("dsr_ticket_from_lines", { draft_id, source_ids: [sid] })).error, /not confirmed/);
+      assert.equal(crm.tickets.length, 0);
+      const r = await call("dsr_ticket_from_lines", { draft_id, source_ids: [sid], confirmed: true });
+      assert.deepEqual([r.results[0].key, r.results[0].created], ["CRM-1", true]);
+      assert.equal(crm.tickets[0].status, "resolved");
+      const e = server.DRAFTS.get(draft_id)!.entries.find((x) => x.source_id === sid)!;
+      assert.deepEqual([e.ticket, e.task_name, e.product], [101, "CRM-1 Rework lead import", 7]);
+      assert.match((await call("dsr_submit", { draft_id, confirmed: true })).error, /preview/i);
+    });
+
+    test("after linking, submit refreshes the entry the CRM auto-logged", async () => {
+      const { draft_id } = await call("dsr_generate", { extra, exclude: ["CRM-1"] });
+      const sid = await lineId(draft_id, "Rework");
+      await call("dsr_ticket_from_lines", { draft_id, source_ids: [sid], confirmed: true });
+      assert.equal(crm.entries.length, 1); // the CRM's own small entry
+      const pre = await call("dsr_preview", { draft_id });
+      assert.equal(pre.overlaps[0].kind, "same_work");
+      const done = await call("dsr_submit", { draft_id, confirmed: true, on_overlap: "separate" });
+      assert.equal(done.results[0].result, "updated");
+      assert.equal(crm.entries.length, 1);
+      assert.equal(crm.entries[0].hours_spent, "1.00");
+    });
+
+    test("an existing open ticket with the same title is linked, not duplicated", async () => {
+      await crm.createTicket({ title: "Rework lead import", product: 7, status: "open" });
+      const { draft_id } = await call("dsr_generate", { extra });
+      const sid = await lineId(draft_id, "Rework");
+      const r = await call("dsr_ticket_from_lines", { draft_id, source_ids: [sid], confirmed: true });
+      assert.deepEqual([r.results[0].key, r.results[0].linked, r.results[0].created], ["CRM-1", true, undefined]);
+      assert.equal(crm.tickets.length, 1);
+    });
+
+    test("refuses a line with no project and a line that already has a ticket; git lines get the repo name stripped", async () => {
+      const parent = fs.mkdtempSync(path.join(os.tmpdir(), "dsr-parent-"));
+      const made = makeRepo([[`${DAY}T09:00:00`, "Fix export"]]);
+      const repo = path.join(parent, "CRM");
+      fs.renameSync(made, repo);
+      const other = makeRepo([[`${DAY}T09:00:00`, "Add thing"]]); // folder name matches no project
+      const { draft_id } = await call("dsr_generate", { repos: [repo, other], extra: [{ activity: "Call with client" }] });
+      const entries = server.DRAFTS.get(draft_id)!.entries;
+      const ids = (pred: (e: core.Entry) => boolean) => entries.find(pred)!.source_id;
+      const r = await call("dsr_ticket_from_lines", { draft_id, confirmed: true, source_ids: [
+        ids((e) => e.source === "git" && e.product === 7), ids((e) => e.source === "git" && e.product === null),
+        ids((e) => e.source === "manual"), "CRM-1", "nope"] });
+      assert.equal(r.results[0].key, "CRM-1");
+      assert.equal(crm.tickets[0].title, "Fix export");
+      assert.match(r.results[1].refused, /project is needed/);
+      assert.match(r.results[2].refused, /project is needed/);
+      assert.match(r.results[3].refused, /already has a ticket|only git or manual/);
+      assert.match(r.results[4].refused, /no such line/);
+      assert.equal(crm.tickets.length, 1);
+      const again = await call("dsr_ticket_from_lines", { draft_id, confirmed: true, source_ids: [ids((e) => e.source === "git" && e.product === 7)] });
+      assert.match(again.results[0].refused, /already has a ticket/);
+    });
+  });
+
   test("repos can be passed per request", async () => {
     const repo = makeRepo([[`${DAY}T09:00:00`, "Fix export"]]);
     const draft = (await call("dsr_generate", { repos: [repo] })).draft;
@@ -413,18 +529,37 @@ describe("setup", () => {
     assert.ok(!fs.existsSync(path.join(home, ".cursor"))); // not installed, so not created
   });
 
-  test("installs /dsr for Claude Code and OpenCode, and never overwrites someone else's file", async () => {
+  test("installs /dsr, /ticket and /dsr-ticket for Claude Code and OpenCode, and never overwrites someone else's file", async () => {
     const { commandTargets, installCommand } = await import("../src/setup.ts");
     const home = homeWith(".claude", ".config/opencode");
-    const [claude, opencode] = commandTargets(home);
-    assert.equal(installCommand(claude), "installed");
-    assert.equal(installCommand(opencode), "installed");
-    assert.match(fs.readFileSync(claude.file, "utf8"), /dsr_submit with confirmed=true ONLY after/);
-    assert.ok(claude.file.endsWith(path.join("commands", "dsr.md")));
-    assert.equal(installCommand(claude), "installed"); // ours, so it refreshes
-    fs.writeFileSync(opencode.file, "my own /dsr");
-    assert.match(installCommand(opencode), /^skipped/);
-    assert.equal(fs.readFileSync(opencode.file, "utf8"), "my own /dsr");
+    const targets = commandTargets(home);
+    assert.equal(targets.length, 6);
+    for (const t of targets) assert.equal(installCommand(t), "installed");
+    for (const n of ["dsr", "ticket", "dsr-ticket"]) {
+      for (const dir of [".claude/commands", ".config/opencode/commands"]) {
+        const text = fs.readFileSync(path.join(home, dir, `${n}.md`), "utf8");
+        assert.match(text, /<!-- dsr-mcp -->/);
+        assert.match(text, /^---\ndescription: .+\n---/);
+        assert.match(text, /\$ARGUMENTS/);
+      }
+    }
+    assert.match(fs.readFileSync(path.join(home, ".claude/commands/dsr.md"), "utf8"), /dsr_submit with confirmed=true ONLY after/);
+    assert.match(fs.readFileSync(path.join(home, ".claude/commands/ticket.md"), "utf8"), /crm_create_ticket with confirmed=true/);
+    assert.match(fs.readFileSync(path.join(home, ".claude/commands/dsr-ticket.md"), "utf8"), /dsr_ticket_from_lines/);
+    const ticket = targets.find((t) => t.file === path.join(home, ".config/opencode/commands/ticket.md"))!;
+    assert.equal(installCommand(ticket), "installed"); // ours, so it refreshes
+    fs.writeFileSync(ticket.file, "my own /ticket");
+    assert.match(installCommand(ticket), /^skipped/);
+    assert.equal(fs.readFileSync(ticket.file, "utf8"), "my own /ticket");
+  });
+
+  test("setup installs the command files into a temp home", async () => {
+    const home = homeWith(".claude");
+    const saved = process.env.PATH;
+    process.env.PATH = "/usr/bin:/bin"; // no claude/codex on the path, so no real config is touched
+    const { setup } = await import("../src/setup.ts");
+    try { await setup({ home }); } finally { process.env.PATH = saved; }
+    assert.ok(["dsr", "ticket", "dsr-ticket"].every((n) => fs.existsSync(path.join(home, ".claude", "commands", `${n}.md`))));
+    assert.ok(!fs.existsSync(path.join(home, ".config")));
   });
 });
-

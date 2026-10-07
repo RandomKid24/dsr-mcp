@@ -22,6 +22,9 @@ export interface CRMClient {
   activities(date?: string): Promise<any[]>;
   create(entry: Record<string, unknown>): Promise<any>;
   update(id: number, fields: Record<string, unknown>): Promise<any>;
+  findTickets(opts?: { q?: string; product?: number; status?: "open" | "all" }): Promise<any[]>;
+  createTicket(body: Record<string, unknown>): Promise<any>; // 409 -> Conflict with .existing
+  createProject(body: { name: string; key?: string }): Promise<any>; // 403 unless owner/admin, 409 -> Conflict
 }
 
 export class CRM implements CRMClient {
@@ -57,4 +60,12 @@ export class CRM implements CRMClient {
   activities(date?: string) { return this.call("GET", "/activities/today/", { query: date ? { date } : {} }); }
   create(entry: Record<string, unknown>) { return this.call("POST", "/dsr/", { json: entry }); }
   update(id: number, fields: Record<string, unknown>) { return this.call("PUT", `/dsr/${id}/`, { json: fields }); }
+  findTickets(o: { q?: string; product?: number; status?: "open" | "all" } = {}) {
+    const query: Record<string, string> = { status: o.status ?? "open" };
+    if (o.q) query.q = o.q;
+    if (o.product !== undefined) query.product = String(o.product);
+    return this.call("GET", "/tickets/", { query });
+  }
+  createTicket(body: Record<string, unknown>) { return this.call("POST", "/tickets/", { json: body }); }
+  createProject(body: { name: string; key?: string }) { return this.call("POST", "/projects/", { json: body }); }
 }

@@ -10,6 +10,15 @@ Type **`/dsr`** in your AI coding tool (or just say **"create my DSR"**) and it 
 4. The hours are filled in for you from real times (see below). It asks one thing: submit?
 5. It sends it to the CRM. It never submits without your yes, and it never creates duplicates, and if today's DSR already has entries it checks for overlap and asks you what to do (see below).
 
+## Creating tickets: /ticket and /dsr-ticket
+
+Two more commands, and each also works by just typing the request in chat ("make a ticket for the login bug", "make tickets for my commits and file my DSR").
+
+- **`/ticket`** only creates tickets. If you describe the ticket in words, it uses that. Otherwise it looks at today's work (commits, ticket activity) and **asks which ones to turn into tickets**; you can type your own too. It checks your projects and picks one only if exactly one fits, otherwise it asks. It searches for existing tickets first and tells you about near matches. Then it shows each ticket (title, project, status) and asks for a yes. Tickets are assigned to you. It ends with the ticket keys and links.
+- **`/dsr-ticket`** creates tickets and files the DSR together. It builds the DSR draft, shows the lines, and **asks which lines should become tickets** and which should only be in the DSR (lines that already come from a ticket don't need one). After your yes it creates the tickets, links them to the lines, shows the DSR again and, after another yes, submits it. A finished line makes a resolved ticket, anything else an in-progress one. Hours are still measured, never asked.
+
+Nothing is created without a yes. If no project fits (or none exist) you are asked to pick one or create one. **Only owners and admins can create projects**; anyone else is told to ask an admin. Codex and other tools without slash commands just use chat: the tool descriptions tell the AI to list your projects first, ask before choosing, and ask before creating anything.
+
 ## Where the hours come from
 
 You are never asked for hours. Each line's time is measured from when the work actually happened:
@@ -47,7 +56,7 @@ It finds the AI tools on your computer and adds the DSR server to each one: Clau
 
 Then **open a new session** (or restart the app) and type `/dsr`. Sessions that were already open won't see it.
 
-`setup` also adds a `/dsr` command to Claude Code (`~/.claude/commands/dsr.md`) and OpenCode (`~/.config/opencode/commands/dsr.md`). MCP servers can't be given a `/dsr` name themselves (tools never appear in the `/` menu, and MCP prompts are forced to look like `/mcp__dsr__something`), so this small file is what gives you the short command. A file with that name that you wrote yourself is never overwritten. In Codex and other tools, say "create my DSR" in plain words.
+`setup` also adds the `/dsr`, `/ticket` and `/dsr-ticket` commands to Claude Code (`~/.claude/commands/`) and OpenCode (`~/.config/opencode/commands/`). Re-run `setup` to get the newer commands if you installed before they existed. MCP servers can't be given a `/dsr` name themselves (tools never appear in the `/` menu, and MCP prompts are forced to look like `/mcp__dsr__something`), so this small file is what gives you the short command. A file with one of those names that you wrote yourself is never overwritten. In Codex and other tools, say "create my DSR" in plain words.
 
 ### Terminal and app: is one install enough?
 
@@ -119,7 +128,7 @@ It reads git commits from the folder your AI tool is open in. Open the tool in t
 
 ## For developers
 
-Eight tools: `dsr_get_user`, `dsr_get_projects`, `dsr_get_today`, `dsr_get_existing`, `dsr_generate` (`group_by`: `line` or `project`), `dsr_preview` (reports overlaps), `dsr_submit` (needs `confirmed=true`, a preview first, and `on_overlap`: `separate`, `merge` or `skip` when the preview found overlaps), `dsr_update` (needs `confirmed=true`).
+Twelve tools: `dsr_get_user`, `dsr_get_projects`, `dsr_get_today`, `dsr_get_existing`, `dsr_generate` (`group_by`: `line` or `project`), `dsr_preview` (reports overlaps), `dsr_submit` (needs `confirmed=true`, a preview first, and `on_overlap`: `separate`, `merge` or `skip` when the preview found overlaps), `dsr_update` (needs `confirmed=true`), `crm_find_tickets`, `crm_create_ticket` and `crm_create_project` (both need `confirmed=true`; a 409 returns the existing ticket, a 403 means the user is not an owner or admin), and `dsr_ticket_from_lines` (needs `confirmed=true`; creates or links a ticket per chosen git/manual line, rewrites the line and un-previews the draft so `dsr_preview` must run again).
 
 ```bash
 git clone https://github.com/RandomKid24/dsr-mcp.git && cd dsr-mcp
@@ -127,7 +136,7 @@ npm install && npm test      # tests run straight from the TypeScript (Node 22.1
 ```
 
 - **Add a source** (GitHub PRs, Jira...): write `src/sources/yours.ts` exporting `collect(ctx) => Activity[]` and add it to `SOURCES` in `src/sources/index.ts`. Draft, preview and submit code don't change.
-- **CRM API** (in the CRM repo, `/api/v1/`): `users/me/`, `projects/`, `activities/today/`, `dsr/today/`, `dsr/`, `dsr/<id>/`. Sign-in uses the CRM's loopback OAuth with `client_id=dsr-mcp`.
+- **CRM API** (in the CRM repo, `/api/v1/`): `users/me/`, `projects/`, `activities/today/`, `dsr/today/`, `dsr/`, `dsr/<id>/`, `tickets/` (GET to search, POST to create), `projects/` (GET, POST). Sign-in uses the CRM's loopback OAuth with `client_id=dsr-mcp`.
 - **Other CRM:** set `CRM_URL` and `CRM_TOKEN` in the tool's env to skip the browser sign-in.
 - **Add a tool to `setup`:** add one row to `jsonTargets` in `src/setup.ts` (config file, the key that holds servers, entry shape).
 - **Publish to npm** to get the shorter, self-updating `npx -y dsr-mcp@latest`: run `npm publish` (use a scoped name like `@beforth/dsr-mcp` for a private package), then change `SPEC` in `src/setup.ts`.
