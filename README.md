@@ -136,7 +136,7 @@ npm install && npm test      # tests run straight from the TypeScript (Node 22.1
 ```
 
 - **Add a source** (GitHub PRs, Jira...): write `src/sources/yours.ts` exporting `collect(ctx) => Activity[]` and add it to `SOURCES` in `src/sources/index.ts`. Draft, preview and submit code don't change.
-- **CRM API** (in the CRM repo, `/api/v1/`): `users/me/`, `projects/`, `activities/today/`, `dsr/today/`, `dsr/`, `dsr/<id>/`, `tickets/` (GET to search, POST to create), `projects/` (GET, POST). Sign-in uses the CRM's loopback OAuth with `client_id=dsr-mcp`.
+- **CRM API** (in the CRM repo, `/api/v1/`): `users/me/`, `projects/`, `activities/today/`, `dsr/today/`, `dsr/`, `dsr/<id>/`, `dsr/tickets/` (GET to search, POST to create), `projects/` (GET, POST). Sign-in uses the CRM's loopback OAuth with `client_id=dsr-mcp`.
 - **Other CRM:** set `CRM_URL` and `CRM_TOKEN` in the tool's env to skip the browser sign-in.
 - **Add a tool to `setup`:** add one row to `jsonTargets` in `src/setup.ts` (config file, the key that holds servers, entry shape).
 - **Publish to npm** to get the shorter, self-updating `npx -y dsr-mcp@latest`: run `npm publish` (use a scoped name like `@beforth/dsr-mcp` for a private package), then change `SPEC` in `src/setup.ts`.

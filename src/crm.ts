@@ -64,8 +64,8 @@ export class CRM implements CRMClient {
     const query: Record<string, string> = { status: o.status ?? "open" };
     if (o.q) query.q = o.q;
     if (o.product !== undefined) query.product = String(o.product);
-    return this.call("GET", "/tickets/", { query });
+    return this.call("GET", "/dsr/tickets/", { query });
   }
-  createTicket(body: Record<string, unknown>) { return this.call("POST", "/tickets/", { json: body }); }
+  createTicket(body: Record<string, unknown>) { return this.call("POST", "/dsr/tickets/", { json: body }); }
   createProject(body: { name: string; key?: string }) { return this.call("POST", "/projects/", { json: body }); }
 }
