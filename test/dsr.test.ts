@@ -185,14 +185,67 @@ describe("MCP tools", () => {
 });
 
 describe("setup", () => {
-  test("registers with installed clients and skips login when already signed in", async () => {
+  const cmd = ["npx", "-y", "github:RandomKid24/dsr-mcp"];
+  const homeWith = (...dirs: string[]) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "dsr-home-"));
+    for (const d of dirs) fs.mkdirSync(path.join(home, d), { recursive: true });
+    return home;
+  };
+  const targets = async (home: string) => (await import("../src/setup.ts")).jsonTargets(home, "darwin", {});
+  const find = async (home: string, name: string) => (await targets(home)).find((t) => t.name === name)!;
+
+  test("adds dsr to a tool's JSON and keeps everything else, with a backup", async () => {
+    const { mergeJson } = await import("../src/setup.ts");
+    const home = homeWith(".kiro/settings");
+    const t = await find(home, "Kiro");
+    fs.writeFileSync(t.file, JSON.stringify({ mcpServers: { other: { command: "x" } }, theme: "dark" }));
+    assert.equal(mergeJson(t, cmd), "registered");
+    const doc = JSON.parse(fs.readFileSync(t.file, "utf8"));
+    assert.deepEqual(doc.mcpServers.dsr, { command: "npx", args: ["-y", "github:RandomKid24/dsr-mcp"] });
+    assert.equal(doc.mcpServers.other.command, "x");
+    assert.equal(doc.theme, "dark");
+    assert.ok(fs.existsSync(`${t.file}.dsr-backup`));
+    assert.equal(mergeJson(t, cmd), "updated"); // running setup twice is harmless
+  });
+
+  test("creates the file when the tool is installed but has none; OpenCode uses its own shape", async () => {
+    const { mergeJson } = await import("../src/setup.ts");
+    const home = homeWith(".config/opencode");
+    const t = await find(home, "OpenCode");
+    assert.equal(mergeJson(t, cmd), "registered");
+    assert.deepEqual(JSON.parse(fs.readFileSync(t.file, "utf8")).mcp.dsr, { type: "local", command: cmd, enabled: true });
+    assert.ok(t.file.endsWith("opencode.json")); // never the commented opencode.jsonc
+  });
+
+  test("a file with comments is left untouched and reported", async () => {
+    const { mergeJson } = await import("../src/setup.ts");
+    const home = homeWith(".cursor");
+    const t = await find(home, "Cursor");
+    const original = '{\n  // my servers\n  "mcpServers": {}\n}';
+    fs.writeFileSync(t.file, original);
+    assert.match(mergeJson(t, cmd), /^skipped/);
+    assert.equal(fs.readFileSync(t.file, "utf8"), original);
+  });
+
+  test("Claude Desktop's folder depends on the OS", async () => {
+    const { jsonTargets } = await import("../src/setup.ts");
+    const mac = jsonTargets("/h", "darwin", {}).find((t) => t.name.startsWith("Claude Desktop"))!;
+    const win = jsonTargets("C:\\u", "win32", { APPDATA: "C:\\ap" }).find((t) => t.name.startsWith("Claude Desktop"))!;
+    assert.match(mac.file, /Library\/Application Support\/Claude\/claude_desktop_config\.json$/);
+    assert.match(win.file, /ap.*Claude.*claude_desktop_config\.json$/);
+  });
+
+  test("setup registers with installed CLI tools and only touches tools that exist", async () => {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), "dsr-bin-"));
     const log = path.join(bin, "calls.txt");
     fs.writeFileSync(path.join(bin, "claude"), `#!/bin/sh\necho "$@" >> ${log}\n`, { mode: 0o755 });
-    const saved = { ...process.env };
-    Object.assign(process.env, { PATH: `${bin}:/usr/bin:/bin`, CRM_URL: "https://crm.x", CRM_TOKEN: "t" });
+    const home = homeWith(".kiro");
+    const saved = process.env.PATH;
+    process.env.PATH = `${bin}:/usr/bin:/bin`;
     const { setup } = await import("../src/setup.ts");
-    try { await setup("https://crm.x"); } finally { process.env = saved; }
+    try { await setup({ home }); } finally { process.env.PATH = saved; }
     assert.equal(fs.readFileSync(log, "utf8").trim(), "mcp add dsr --scope user -- npx -y github:RandomKid24/dsr-mcp");
+    assert.ok(fs.existsSync(path.join(home, ".kiro", "settings", "mcp.json")));
+    assert.ok(!fs.existsSync(path.join(home, ".cursor"))); // not installed, so not created
   });
 });

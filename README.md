@@ -10,44 +10,50 @@ Tell your AI coding tool **"create my DSR"** and it writes your Daily Status Rep
 4. You fix the hours if needed and say "submit it".
 5. It sends it to the CRM. It never submits without your yes, and it never creates duplicates: running it twice just says "already there".
 
-## Install: copy, paste, done
+## Install: one command
 
-You need **Node 18 or newer** (check with `node -v`). That is all. There is nothing to download or build.
+You need **Node 18 or newer** (check with `node -v`). Nothing else to download or build.
 
-Every tool below starts the server with the same thing: `npx -y github:RandomKid24/dsr-mcp`. Pick your tool, paste, restart the tool.
+Paste this in any terminal (in the Claude Code app, use its Terminal panel):
 
-**Claude Code** (run in a terminal)
 ```bash
-claude mcp add dsr --scope user -- npx -y github:RandomKid24/dsr-mcp
+npx -y github:RandomKid24/dsr-mcp setup
 ```
 
-**Codex** (run in a terminal)
-```bash
-codex mcp add dsr -- npx -y github:RandomKid24/dsr-mcp
-```
+It finds the AI tools on your computer and adds the DSR server to each one: Claude Code, Codex, OpenCode, Kiro, Cursor, Windsurf, Gemini CLI and the Claude Desktop chat. It leaves your existing settings alone (it keeps a `.dsr-backup` copy of any file it edits), skips tools you don't have, and is safe to run twice.
 
-**OpenCode**: add this to `~/.config/opencode/opencode.json`
-```json
-{ "mcp": { "dsr": { "type": "local", "command": ["npx", "-y", "github:RandomKid24/dsr-mcp"] } } }
-```
+Then **open a new session** (or restart the app) and say "create my DSR". Sessions that were already open won't see it.
 
-**Kiro**: add this to `~/.kiro/settings/mcp.json`
-```json
-{ "mcpServers": { "dsr": { "command": "npx", "args": ["-y", "github:RandomKid24/dsr-mcp"] } } }
-```
+### Terminal and app: is one install enough?
 
-**Claude Desktop**: Settings, Developer, Edit Config, then add this to `claude_desktop_config.json`
-```json
-{ "mcpServers": { "dsr": { "command": "npx", "args": ["-y", "github:RandomKid24/dsr-mcp"] } } }
-```
+| Tool | Terminal and app share one setup? | Notes |
+|---|---|---|
+| Claude Code | Yes. Confirmed: the Claude Code app picked up a server added from the terminal | Check with `/mcp` in a new session |
+| Codex | Yes, both read `~/.codex/config.toml` | Reopen the Codex app |
+| OpenCode | Yes, same config folder | Check with `opencode mcp list` |
+| Kiro | Yes, IDE and CLI both use `~/.kiro/settings/mcp.json` | Reopen Kiro |
+| Cursor | Yes, `~/.cursor/mcp.json` | Reopen Cursor |
+| Claude Desktop (chat window) | Separate from Claude Code | Only if you want it in normal chat; restart the app |
+| Windsurf, Gemini CLI | Yes | Reopen the tool |
+| MiMo and other tools | Not known | Use the manual block below |
 
-**Cursor**: add the same block as Kiro to `~/.cursor/mcp.json`.
+Verified on a real machine with the real tools: Claude Code, Codex and OpenCode each listed `dsr` as connected after `setup`. The others (Kiro, Cursor, Windsurf, Gemini CLI, Claude Desktop) are written from their documented config locations and covered by tests, but have not been run in the real apps.
 
-**Any other tool (MiMo, Windsurf, VS Code...)**: if it supports MCP servers, it will ask for a command and arguments, or take the same JSON block as Kiro. Command: `npx`. Arguments: `-y github:RandomKid24/dsr-mcp`.
+### Manual install (only if `setup` skipped your tool)
 
-On Windows, if a tool can't start `npx`, use `cmd` as the command and `/c npx -y github:RandomKid24/dsr-mcp` as the arguments.
+Every tool starts the server with the same thing: command `npx`, arguments `-y github:RandomKid24/dsr-mcp`.
 
-The config file locations above come from each tool's docs and can change. If a path is missing, search that tool's docs for "MCP servers".
+- **Claude Code:** `claude mcp add dsr --scope user -- npx -y github:RandomKid24/dsr-mcp`
+- **Codex:** `codex mcp add dsr -- npx -y github:RandomKid24/dsr-mcp`
+- **OpenCode:** run `opencode mcp add` and answer: name `dsr`, type local, command `npx -y github:RandomKid24/dsr-mcp`. Or put this in `~/.config/opencode/opencode.json` (it works even if you also have an `opencode.jsonc`; OpenCode merges them):
+  ```json
+  { "mcp": { "dsr": { "type": "local", "command": ["npx", "-y", "github:RandomKid24/dsr-mcp"] } } }
+  ```
+- **Kiro, Cursor, Windsurf, Gemini CLI, Claude Desktop, and most others:** add this to the tool's MCP config file (`~/.kiro/settings/mcp.json`, `~/.cursor/mcp.json`, and so on), or enter the command and arguments in its MCP settings screen:
+  ```json
+  { "mcpServers": { "dsr": { "command": "npx", "args": ["-y", "github:RandomKid24/dsr-mcp"] } } }
+  ```
+- **Windows:** if a tool can't start `npx`, use `cmd` as the command and `/c npx -y github:RandomKid24/dsr-mcp` as the arguments.
 
 ## First time you use it
 
@@ -74,6 +80,7 @@ It reads git commits from the folder your AI tool is open in. Open the tool in t
 
 | Problem | Fix |
 |---|---|
+| `dsr` is not in the tool's MCP list | Open a **new** session or restart the app. Already-open sessions load their tools once at the start. |
 | Tool says the server failed to start or `npx` not found | Run `which npx` (Windows: `where npx`) and put that full path in the config as the command. Common when Node comes from nvm. |
 | Browser didn't open for sign-in | The AI shows you the link. Open it yourself. |
 | "No activity found" | Open the tool in the project folder, or give the repo path. Only commits made by your own git email are counted, on today's date. |
@@ -94,4 +101,5 @@ npm install && npm test      # tests run straight from the TypeScript (Node 22.1
 - **Add a source** (GitHub PRs, Jira...): write `src/sources/yours.ts` exporting `collect(ctx) => Activity[]` and add it to `SOURCES` in `src/sources/index.ts`. Draft, preview and submit code don't change.
 - **CRM API** (in the CRM repo, `/api/v1/`): `users/me/`, `projects/`, `activities/today/`, `dsr/today/`, `dsr/`, `dsr/<id>/`. Sign-in uses the CRM's loopback OAuth with `client_id=dsr-mcp`.
 - **Other CRM:** set `CRM_URL` and `CRM_TOKEN` in the tool's env to skip the browser sign-in.
+- **Add a tool to `setup`:** add one row to `jsonTargets` in `src/setup.ts` (config file, the key that holds servers, entry shape).
 - **Publish to npm** to get the shorter, self-updating `npx -y dsr-mcp@latest`: run `npm publish` (use a scoped name like `@beforth/dsr-mcp` for a private package), then change `SPEC` in `src/setup.ts`.
