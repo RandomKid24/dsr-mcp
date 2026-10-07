@@ -10,6 +10,8 @@ import path from "node:path";
 export interface RepoConfig { path: string; project?: string }
 export interface Config { url: string; token: string; repos: RepoConfig[] }
 
+export const DEFAULT_URL = "https://crm.beforth.in";
+
 export const CONFIG_PATH =
   process.env.DSR_MCP_CONFIG || path.join(os.homedir(), ".config", "dsr-mcp", "config.json");
 
@@ -20,7 +22,7 @@ function read(): Record<string, unknown> {
 export function load(): Config {
   const f = read();
   return {
-    url: (process.env.CRM_URL || (f.url as string) || "").replace(/\/+$/, ""),
+    url: (process.env.CRM_URL || (f.url as string) || DEFAULT_URL).replace(/\/+$/, ""),
     token: process.env.CRM_TOKEN || (f.token as string) || "",
     repos: (f.repos as RepoConfig[]) || [],
   };

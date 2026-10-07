@@ -158,12 +158,29 @@ describe("MCP tools", () => {
     assert.match((await call("dsr_update", { entry_id: 1, hours_spent: 2 })).error, /not confirmed/);
   });
 
-  test("CRM errors come back as data, not crashes", async () => {
-    server.deps.crm = () => { throw new CRMError(0, "Not signed in."); };
-    const res: any = await client.callTool({ name: "dsr_get_user", arguments: {} }).catch((e) => ({ threw: e }));
-    // A thrown CRMError from the factory is caught by the guard and returned as an error result.
-    assert.match(res.content[0].text, /Not signed in/);
+  test("other CRM errors come back as data, not crashes", async () => {
+    server.deps.crm = () => { throw new CRMError(403, "Invalid or revoked token."); };
+    const res: any = await client.callTool({ name: "dsr_get_user", arguments: {} });
+    assert.match(res.content[0].text, /revoked/);
     assert.equal(res.isError, true);
+  });
+
+  test("not signed in: opens the sign-in once and tells the AI what to say", async () => {
+    let opened = 0;
+    server.deps.crm = () => { throw new CRMError(0, "Not signed in to the CRM."); };
+    server.deps.startLogin = async () => { opened++; return { link: "https://crm.x/oauth/authorize/?x=1", done: new Promise<void>(() => {}) }; };
+    const first = (await call("dsr_get_user")).error;
+    const second = (await call("dsr_generate")).error;
+    assert.match(first, /opened the user's browser/);
+    assert.match(first, /https:\/\/crm\.x\/oauth\/authorize/);
+    assert.equal(second, first);
+    assert.equal(opened, 1); // a second request while waiting does not open a second tab
+  });
+
+  test("repos can be passed per request", async () => {
+    const repo = makeRepo([[`${DAY}T09:00:00`, "Fix export"]]);
+    const draft = (await call("dsr_generate", { repos: [repo] })).draft;
+    assert.match(draft, /Fix export/);
   });
 });
 

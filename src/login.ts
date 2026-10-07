@@ -15,7 +15,8 @@ function openBrowser(url: string) {
   execFile(cmd as string, args as string[], () => {}); // if it fails the link is printed anyway
 }
 
-export async function login(rawUrl: string) {
+/** Opens the sign-in page and returns its link right away; `done` settles once the token is saved. */
+export async function startLogin(rawUrl: string): Promise<{ link: string; done: Promise<void> }> {
   const url = rawUrl.replace(/\/+$/, "");
   const state = randomBytes(16).toString("base64url");
   let resolveCode!: (c: string | null) => void;
@@ -29,21 +30,28 @@ export async function login(rawUrl: string) {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const redirect = `http://127.0.0.1:${(server.address() as AddressInfo).port}/callback`;
   const link = `${url}/oauth/authorize/?` + new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: redirect, state });
-  console.log(`Opening your browser to sign in. If it does not open, visit:\n${link}`);
   openBrowser(link);
 
-  const timer = setTimeout(() => resolveCode(null), 180_000);
-  const code = await got;
-  clearTimeout(timer);
-  server.close();
-  if (!code) throw new Error("Sign-in timed out or was refused.");
+  const done = (async () => {
+    const timer = setTimeout(() => resolveCode(null), 180_000);
+    const code = await got;
+    clearTimeout(timer);
+    server.close();
+    if (!code) throw new Error("Sign-in timed out or was refused.");
+    const res = await fetch(`${url}/oauth/token/`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, client_id: CLIENT_ID }), signal: AbortSignal.timeout(20_000),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!data.ok) throw new Error(`Token exchange failed: ${JSON.stringify(data)}`);
+    config.save({ url, token: data.token });
+  })();
+  return { link, done };
+}
 
-  const res = await fetch(`${url}/oauth/token/`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, client_id: CLIENT_ID }), signal: AbortSignal.timeout(20_000),
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (!data.ok) throw new Error(`Token exchange failed: ${JSON.stringify(data)}`);
-  config.save({ url, token: data.token });
-  console.log(`Signed in as ${data.user?.username ?? ""}. Saved to ${config.CONFIG_PATH}`);
+export async function login(rawUrl: string) {
+  const { link, done } = await startLogin(rawUrl);
+  console.log(`Opening your browser to sign in. If it does not open, visit:\n${link}`);
+  await done;
+  console.log(`Signed in. Saved to ${config.CONFIG_PATH}`);
 }

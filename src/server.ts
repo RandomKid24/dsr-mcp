@@ -4,15 +4,31 @@ import { z } from "zod";
 import * as config from "./config.ts";
 import * as core from "./core.ts";
 import { CRM, CRMError } from "./crm.ts";
+import { startLogin } from "./login.ts";
 
 // ponytail: drafts live in this process (one MCP session). Persist them if a draft must survive a restart.
 export const DRAFTS = new Map<string, core.Draft>();
-export const deps = { crm: () => ({ crm: new CRM(config.load().url, config.load().token) as import("./crm.ts").CRMClient, cfg: config.load() }) };
+export const deps = {
+  startLogin, crm: () => ({ crm: new CRM(config.load().url, config.load().token) as import("./crm.ts").CRMClient, cfg: config.load() }) };
 
 const reply = (data: unknown, isError = false) => ({
   content: [{ type: "text" as const, text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }],
   isError,
 });
+
+let signingIn: string | null = null; // the sign-in link while a sign-in is waiting for the user
+
+/** Not signed in yet: open the browser (once) and tell the AI what to say, instead of failing. */
+async function askToSignIn() {
+  if (!signingIn) {
+    const { link, done } = await deps.startLogin(config.load().url);
+    signingIn = link;
+    done.catch(() => {}).finally(() => { signingIn = null; });
+  }
+  return {
+    error: `Not signed in to the CRM. I opened the user's browser to sign in. If it did not open, give them this link: ${signingIn}\nTell them to sign in, then ask again.`,
+  };
+}
 
 /** A CRM failure comes back as {"error": ...} instead of crashing the server. */
 const guard = <A>(fn: (a: A) => Promise<unknown>) => async (a: A) => {
@@ -20,10 +36,16 @@ const guard = <A>(fn: (a: A) => Promise<unknown>) => async (a: A) => {
     const out = await fn(a);
     return reply(out, typeof out === "object" && out !== null && "error" in out);
   } catch (e) {
+    if (e instanceof CRMError && e.status === 0) return reply(await askToSignIn(), true);
     if (e instanceof CRMError) return reply({ error: e.message }, true);
     throw e;
   }
 };
+
+const reposParam = z.array(z.string()).optional()
+  .describe("Absolute paths of git repos to read. Default: the folder this tool was started in, plus any repos in the user's config. Pass the project folder when the AI app has no project open.");
+const withRepos = (cfg: config.Config, repos?: string[]): config.Config =>
+  repos?.length ? { ...cfg, repos: repos.map((path) => ({ path })) } : cfg;
 
 export function createServer() {
   const server = new McpServer({ name: "beforth-dsr", version: "0.2.0" });
@@ -38,10 +60,10 @@ export function createServer() {
 
   tool("dsr_get_today",
     "Raw evidence of today's work (git commits, CRM tickets), each with source, sourceId and timestamp. Use this to answer 'what did I do today?'. Never invent work that is not in this list.",
-    { date: z.string().optional().describe("YYYY-MM-DD, default today") },
-    async ({ date }) => {
+    { date: z.string().optional().describe("YYYY-MM-DD, default today"), repos: reposParam },
+    async ({ date, repos }) => {
       const { crm, cfg } = deps.crm();
-      const ctx = await core.makeContext(crm, cfg, date);
+      const ctx = await core.makeContext(crm, withRepos(cfg, repos), date);
       const { found, errors } = await core.collect(ctx);
       return { date: ctx.date, activities: found, source_errors: errors };
     });
@@ -54,13 +76,14 @@ export function createServer() {
     "Build a DSR draft from the day's evidence. Returns a draft_id and the readable draft. hours: {source_id: hours} to correct a line's hours. exclude: [source_id] to drop lines. extra: [{activity, project, hours}] for work the user says they did that has no source; it is marked UNVERIFIED. Call dsr_preview next, then show the user the result.",
     {
       date: z.string().optional(),
+      repos: reposParam,
       hours: z.record(z.number()).optional(),
       exclude: z.array(z.string()).optional(),
       extra: z.array(z.object({ activity: z.string(), project: z.string().optional(), hours: z.number().optional() })).optional(),
     },
-    async ({ date, hours, exclude, extra }) => {
+    async ({ date, repos, hours, exclude, extra }) => {
       const { crm, cfg } = deps.crm();
-      const ctx = await core.makeContext(crm, cfg, date);
+      const ctx = await core.makeContext(crm, withRepos(cfg, repos), date);
       const { found, errors } = await core.collect(ctx);
       const draft = core.buildDraft(ctx, found, await crm.projects(), { hours, exclude, extra });
       for (const [n, e] of Object.entries(errors)) draft.warnings.push(`Source '${n}' failed: ${e}`);

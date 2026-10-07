@@ -31,7 +31,7 @@ export class CRM implements CRMClient {
     this.url = url;
     this.token = token;
     if (!url || !token) {
-      throw new CRMError(0, "Not signed in. Run `npx github:RandomKid24/dsr-mcp login --url <crm url>` (or set CRM_URL and CRM_TOKEN).");
+      throw new CRMError(0, "Not signed in to the CRM.");
     }
   }
 
