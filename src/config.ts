@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 
 export interface RepoConfig { path: string; project?: string }
-export interface Config { url: string; token: string; repos: RepoConfig[] }
+export interface Config { url: string; token: string; repos: RepoConfig[]; project_map?: Record<string, number> }
 
 export const DEFAULT_URL = "https://crm.beforth.in";
 
@@ -25,6 +25,7 @@ export function load(): Config {
     url: (process.env.CRM_URL || (f.url as string) || DEFAULT_URL).replace(/\/+$/, ""),
     token: process.env.CRM_TOKEN || (f.token as string) || "",
     repos: (f.repos as RepoConfig[]) || [],
+    project_map: (f.project_map as Record<string, number>) || {},
   };
 }
 

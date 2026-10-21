@@ -25,7 +25,9 @@ export interface Draft {
   attendanceMinutes: number | null; // the day's real worked time from attendance
   scaledDown: boolean; // measured time was more than attendance, so it was shrunk to fit
   overlaps: Overlap[]; // lines that match an entry already in the CRM (set by dsr_generate / dsr_preview)
+  unmatched: Unmatched[]; // repos whose CRM project could not be told apart: the user must pick
 }
+export interface Unmatched { repo: string; candidates: Project[] }
 export type OverlapKind = "same_work" | "similar";
 export interface Overlap { source_id: string; task_name: string; existing_id: number; existing_task: string; kind: OverlapKind; reason: string }
 export type OnOverlap = "separate" | "merge" | "skip";
@@ -86,18 +88,23 @@ const toHours = (minutes: number) => round2(Math.max(MIN_MINUTES, Math.round(min
 
 const category = (text: string) => CATEGORY.find(([rx]) => rx.test(text))?.[1] ?? "other";
 
-/** CRM project id for a source's project name, falling back to the repo name. */
-function projectId(name: string | undefined, group: string, projects: Project[]): number | null {
+/** CRM project id for a source's project name, falling back to the repo name. `map` (repo name ->
+ *  project id, remembered from earlier answers) wins. An exact name wins next; a loose match counts
+ *  only when it is the single candidate, otherwise the caller must ask the user. */
+function projectId(name: string | undefined, group: string, projects: Project[], map: Record<string, number> = {}): { id: number | null; candidates: Project[] } {
+  const mapped = map[group.toLowerCase()];
+  if (mapped !== undefined && projects.some((p) => p.id === mapped)) return { id: mapped, candidates: [] };
   const wanted = [name, group].filter(Boolean).map((n) => n!.toLowerCase());
   const exact = projects.find((p) => wanted.includes(p.name.toLowerCase()));
-  if (exact) return exact.id;
-  const loose = projects.find((p) => wanted.some((w) => w.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(w)));
-  return loose?.id ?? null;
+  if (exact) return { id: exact.id, candidates: [] };
+  const loose = projects.filter((p) => wanted.some((w) => w.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(w)));
+  return loose.length === 1 ? { id: loose[0].id, candidates: [] } : { id: null, candidates: loose };
 }
 
 export interface DraftOptions {
   hours?: Record<string, number>;
   exclude?: string[];
+  project_map?: Record<string, number>; // repo folder name -> CRM project id, for folders named unlike their project
   group_by?: "line" | "project"; // "project": one combined entry per CRM project
   extra?: { activity: string; project?: string; hours?: number; category?: string; status?: string }[];
 }
@@ -111,6 +118,8 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
     groups.set(k, [...(groups.get(k) ?? []), a]);
   }
   const warnings: string[] = [];
+  const unmatched: Unmatched[] = [];
+  const map = Object.fromEntries(Object.entries({ ...ctx.cfg.project_map, ...opts.project_map }).map(([k, v]) => [k.toLowerCase(), v]));
   let entries: Entry[] = [];
 
   for (const acts of groups.values()) {
@@ -136,15 +145,19 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
         source: first.source, source_id: first.sourceId, ticket: first.ticket ?? null, product: null, project: "", evidence,
       };
     }
-    e.product = projectId(first.project, first.source === "git" ? first.group : "", projects);
+    const m = projectId(first.project, first.source === "git" ? first.group : "", projects, map);
+    e.product = m.id;
     e.project = projects.find((p) => p.id === e.product)?.name ?? "";
-    if (first.source === "git" && e.product === null) warnings.push(`No CRM project matched '${first.group}'; it will be logged with no project.`);
+    if (first.source === "git" && e.product === null) {
+      warnings.push(`No single CRM project matched the folder '${first.group}'. ASK the user which project it belongs to, then call dsr_generate again with project_map.`);
+      unmatched.push({ repo: first.group, candidates: m.candidates });
+    }
     entries.push(e);
   }
 
   for (const x of opts.extra ?? []) {
     const digest = createHash("sha1").update(x.activity).digest("hex").slice(0, 8);
-    const product = projectId(x.project, "", projects);
+    const product = projectId(x.project, "", projects, map).id;
     entries.push({
       task_name: x.activity.slice(0, 255), category: x.category ?? "other", status: x.status ?? "completed",
       hours_spent: x.hours ?? 1, minutes: null, notes: "Added by the user; no source.", source: "manual",
@@ -177,7 +190,7 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
       if (fixed !== undefined) e.hours_spent = round2(fixed);
     }
   }
-  return { id: randomUUID().slice(0, 8), date: ctx.date, entries, warnings, previewed: false, attendanceMinutes: cap, scaledDown: factor < 1, overlaps: [] };
+  return { id: randomUUID().slice(0, 8), date: ctx.date, entries, warnings, unmatched, previewed: false, attendanceMinutes: cap, scaledDown: factor < 1, overlaps: [] };
 }
 
 /** Joins names with "; " and fits 255 chars, ending in "(+N more)" when some had to go. */

@@ -73,7 +73,7 @@ export function createServer() {
     async ({ date }) => deps.crm().crm.today(date));
 
   tool("dsr_generate",
-    "Build a DSR draft from the day's evidence. Hours are measured automatically from real commit and ticket times (and capped at the user's attendance), so do NOT ask the user about hours. Returns a draft_id and the readable draft. hours: {source_id: hours} only if the user volunteers a correction. exclude: [source_id] to drop lines. extra: [{activity, project, hours}] for work the user says they did that has no source; it is marked UNVERIFIED. group_by: 'line' (default) is one line per ticket and per repo; 'project' combines every line of the same CRM project into one entry (hours summed). Call dsr_preview next, then show the user the result.",
+    "Build a DSR draft from the day's evidence. Hours are measured automatically from real commit and ticket times (and capped at the user's attendance), so do NOT ask the user about hours. Returns a draft_id and the readable draft. hours: {source_id: hours} only if the user volunteers a correction. exclude: [source_id] to drop lines. extra: [{activity, project, hours}] for work the user says they did that has no source; it is marked UNVERIFIED. group_by: 'line' (default) is one line per ticket and per repo; 'project' combines every line of the same CRM project into one entry (hours summed). If the result has needs_project, ask the user which project each folder belongs to and call dsr_generate again with project_map (the answer is remembered). Call dsr_preview next, then show the user the result.",
     {
       date: z.string().optional(),
       repos: reposParam,
@@ -81,17 +81,26 @@ export function createServer() {
       exclude: z.array(z.string()).optional(),
       extra: z.array(z.object({ activity: z.string(), project: z.string().optional(), hours: z.number().optional() })).optional(),
       group_by: z.enum(["line", "project"]).optional(),
+      project_map: z.record(z.number()).optional().describe("{repo folder name: CRM project id}. Use it only with a project the USER picked for a folder whose name differs from its project. It is remembered for next time."),
     },
-    async ({ date, repos, hours, exclude, extra, group_by }) => {
+    async ({ date, repos, hours, exclude, extra, group_by, project_map }) => {
       const { crm, cfg } = deps.crm();
       const ctx = await core.makeContext(crm, withRepos(cfg, repos), date);
       const { found, errors } = await core.collect(ctx);
-      const draft = core.buildDraft(ctx, found, await crm.projects(), { hours, exclude, extra, group_by });
+      const projects = await crm.projects();
+      const draft = core.buildDraft(ctx, found, projects, { hours, exclude, extra, group_by, project_map });
+      if (project_map) config.save({ project_map: { ...cfg.project_map, ...project_map } });
       for (const [n, e] of Object.entries(errors)) draft.warnings.push(`Source '${n}' failed: ${e}`);
       if (!draft.entries.length) draft.warnings.push("No activity found for this day.");
       draft.overlaps = core.findOverlaps(draft, (await crm.today(draft.date)).entries ?? []);
       DRAFTS.set(draft.id, draft);
-      return { draft_id: draft.id, draft: core.render(draft, ctx.user) };
+      return {
+        draft_id: draft.id, draft: core.render(draft, ctx.user),
+        ...(draft.unmatched.length && {
+          needs_project: draft.unmatched, projects,
+          next: "These folders match no single CRM project. Ask the user which project each belongs to (suggest the candidates, else list projects), then call dsr_generate again with project_map {folder: project id}. Never guess.",
+        }),
+      };
     });
 
   tool("dsr_preview",

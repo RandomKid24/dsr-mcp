@@ -105,6 +105,19 @@ describe("sources and drafting", () => {
     assert.equal(e.evidence.length, 2);
   });
 
+  test("a folder named unlike its project is asked about, then mapped", async () => {
+    const repo = makeRepo([["2026-10-07T09:00:00", "Add lead import"]]);
+    const ctx = ctxFor(new FakeCRM(), repo);
+    const { found } = await core.collect(ctx);
+    const projects = [...PROJECTS, { id: 9, key: "BILL2", name: "Billing v2" }];
+    const asked = core.buildDraft(ctx, found, projects.slice(1).concat({ id: 10, key: "X", name: "Billing app" }));
+    assert.equal(asked.entries[0].product, null); // no folder-name match at all: ask
+    assert.equal(asked.unmatched.length, 1);
+    const name = asked.unmatched[0].repo;
+    const mapped = core.buildDraft(ctx, found, projects, { project_map: { [name]: 9 } });
+    assert.deepEqual([mapped.entries[0].product, mapped.unmatched.length], [9, 0]);
+  });
+
   test("CRM tickets are their own lines, linked to the ticket", async () => {
     const row = { activity: "CRM-007 Vulnerability report: Moved it to in progress", project: "CRM", source_id: "CRM-007", ticket: 55,
       timestamp: `${DAY}T10:40:00+05:30`, suggested_hours: "1.00", category: "bug_fix", status: "in_progress", touched: true,

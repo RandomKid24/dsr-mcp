@@ -10,6 +10,7 @@ Create my Daily Status Report with the dsr MCP tools. $ARGUMENTS
 
 1. Call dsr_get_existing. If a DSR is already filed for the day, tell me what is in it.
 2. Call dsr_generate (use the date if I gave one; if no project folder is open, pass the repo path in \`repos\`). The hours are already measured from real commit and ticket times, so never ask me about hours. If the draft has more than 3 lines, ask me once: keep one entry per ticket/repo, or combine into one entry per project? If I choose project, call dsr_generate again with group_by="project".
+   If the result has needs_project (a folder name that matches no single CRM project), ask me which project each folder belongs to, offering the candidates, then call dsr_generate again with project_map. It is remembered, so I am only asked once per folder.
 3. Call dsr_preview and show me the whole draft.
 4. If dsr_preview reports overlaps with entries already in the CRM, list them in plain words (my line and the existing entry it matches). Lines marked same_work are the same ticket or source as an existing entry, so they are refreshed in place; say so. For lines marked similar, ask me ONE question: keep them as separate entries, merge them into the existing entry, or skip them. Pass my answer to dsr_submit as on_overlap: separate, merge or skip.
 5. Ask me whether to submit. If I volunteer a change (drop a line, correct hours, add work), call dsr_generate again with it, then dsr_preview. Work I add that has no source stays marked unverified.
