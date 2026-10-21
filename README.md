@@ -2,6 +2,16 @@
 
 Type **`/dsr`** in your AI coding tool (or just say **"create my DSR"**) and it writes your Daily Status Report from the work you actually did, shows it to you, and submits it to the BeForth CRM after you say yes.
 
+## Quick reference
+
+| I want to... | Do this |
+|---|---|
+| Install | `npx -y github:RandomKid24/dsr-mcp setup` |
+| **Update to the latest version** | `rm -rf ~/.npm/_npx && npx -y github:RandomKid24/dsr-mcp setup`, then open a new session ([details](#updating-to-a-new-version)) |
+| Sign in again | Say "create my DSR"; the browser opens once |
+| Fix a folder matched to the wrong project | Tell the AI which project it is; it is remembered in `~/.config/dsr-mcp/config.json` under `project_map` |
+| Something is broken | [If something goes wrong](#if-something-goes-wrong) |
+
 ## How it works
 
 1. You say "create my DSR" (or "what did I do today?").
@@ -30,6 +40,10 @@ You are never asked for hours. Each line's time is measured from when the work a
 - **Tickets with no activity today are left out.** Being assigned a ticket is not work done today.
 
 Times are rounded to 5 minutes (minimum 10 minutes), so you may see lines like 45m or 1h 50m.
+
+## When a folder name is not the project name
+
+If a repo folder matches no single CRM project (or several), it asks you which project it belongs to, then remembers the answer. To change a remembered answer, edit `project_map` in `~/.config/dsr-mcp/config.json`, or just tell the AI the right project.
 
 ## Running /dsr more than once a day
 
