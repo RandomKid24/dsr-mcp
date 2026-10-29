@@ -576,3 +576,18 @@ describe("setup", () => {
     assert.ok(!fs.existsSync(path.join(home, ".config")));
   });
 });
+
+describe("guards", () => {
+  test("refuses days too far back or in the future", async () => {
+    await assert.rejects(core.makeContext(new FakeCRM(), { url: "", token: "", repos: [] }, "2026-09-01"), /days ago/);
+    await assert.rejects(core.makeContext(new FakeCRM(), { url: "", token: "", repos: [] }, "2026-10-09"), /future/);
+    assert.equal((await core.makeContext(new FakeCRM(), { url: "", token: "", repos: [] }, "2026-10-01")).date, "2026-10-01");
+  });
+  test("typed hours are cut to the attendance", async () => {
+    const crm = new FakeCRM(); crm.attendance = { net_minutes: 360 };
+    const ctx = await core.makeContext(crm, { url: "", token: "", repos: [] });
+    const d = core.buildDraft(ctx, [], PROJECTS, { extra: [{ activity: "x", hours: 20 }] });
+    assert.equal(d.entries[0].hours_spent, 6);
+    assert.ok(d.warnings.some((w) => /cut to 6h/.test(w)));
+  });
+});

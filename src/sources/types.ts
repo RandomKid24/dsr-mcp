@@ -17,6 +17,7 @@ export interface Activity {
   category?: string;
   status?: string;
   ticket?: number | null; // CRM ticket id, so the CRM links the line to it
+  url?: string; // link to the evidence (a commit page), when there is one
   times?: string[]; // every moment work happened on this item, when the source has more than one
 }
 

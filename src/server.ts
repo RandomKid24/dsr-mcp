@@ -151,13 +151,15 @@ export function createServer() {
     });
 
   tool("dsr_update",
-    "Change one existing DSR entry (get ids from dsr_get_existing). Needs confirmed=true from the user.",
+    "Change one existing DSR entry (get ids from dsr_get_existing; refuses entries that are not the signed-in user's own for that day). Needs confirmed=true from the user.",
     {
-      entry_id: z.number(), confirmed: z.boolean().default(false), task_name: z.string().optional(),
+      entry_id: z.number(), date: z.string().optional().describe("The day the entry belongs to (default today)."), confirmed: z.boolean().default(false), task_name: z.string().optional(),
       hours_spent: z.number().optional(), status: z.string().optional(), category: z.string().optional(), notes: z.string().optional(),
     },
-    async ({ entry_id, confirmed, ...rest }) => {
+    async ({ entry_id, date, confirmed, ...rest }) => {
       if (!confirmed) return { error: "Not updated: the user has not confirmed." };
+      const mine: any[] = (await deps.crm().crm.today(date)).entries ?? [];
+      if (!mine.some((x) => x.id === entry_id)) return { error: `Entry ${entry_id} is not in your own DSR for ${date ?? "today"}, so it was not changed. Pass the right date if it belongs to another day.` };
       const fields = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined && v !== ""));
       if (!Object.keys(fields).length) return { error: "Nothing to change." };
       return deps.crm().crm.update(entry_id, fields);
@@ -224,7 +226,7 @@ export function createServer() {
         if (e.source !== "git" && e.source !== "manual") { no("only git or manual lines can become tickets"); continue; }
         if (e.product === null) { no("it has no project; a project is needed first (pick one or create one with crm_create_project)"); continue; }
         const title = (e.source === "git" ? e.task_name.replace(/^[^:]*: /, "") : e.task_name).slice(0, 200);
-        const description = e.evidence.length ? e.evidence.map((v) => `- ${v.activity} (${v.sourceId})`).join("\n") : e.notes;
+        const description = e.evidence.length ? e.evidence.map((v) => `- ${v.activity} (${v.url ?? v.sourceId})`).join("\n") : e.notes;
         let t: any, how: "created" | "linked" = "created";
         try { t = await crm.createTicket({ title, description, product: e.product, status: e.status === "completed" ? "resolved" : "in_progress", assign_to_me: true }); }
         catch (err) {

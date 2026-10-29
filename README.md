@@ -41,6 +41,16 @@ You are never asked for hours. Each line's time is measured from when the work a
 
 Times are rounded to 5 minutes (minimum 10 minutes), so you may see lines like 45m or 1h 50m.
 
+## Commit links
+
+Commits are listed in the DSR notes and in ticket descriptions as full links (`https://github.com/org/repo/commit/<sha>`), built from the repo's `origin` remote. Whether they are clickable depends on the CRM showing links in notes. A repo with no usable `origin` shows the short sha instead. A commit you have not pushed yet gives a 404 until you push, and the link format is the GitHub/GitLab/Gitea one (Bitbucket uses `/commits/`, so its links will not open).
+
+## Limits (so nobody files the wrong thing)
+
+- **Your own DSR only.** `dsr_update` refuses an entry that is not in your own DSR for that day. The CRM must enforce the same on its side.
+- **Days:** a DSR can be made for today or up to 7 days back, not the future.
+- **Typed hours are capped.** Hours you type ("make it 8 hours", "add: client call, 9h") are cut to that day's attendance, or to 12 hours when there is no attendance. You see a warning when this happens.
+
 ## When a folder name is not the project name
 
 If a repo folder matches no single CRM project (or several), it asks you which project it belongs to, then remembers the answer. To change a remembered answer, edit `project_map` in `~/.config/dsr-mcp/config.json`, or just tell the AI the right project.

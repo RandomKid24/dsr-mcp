@@ -15,6 +15,12 @@ function nextDay(day: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** https://host/owner/repo for an ssh or https origin; null when it has no web page we can guess. */
+function webBase(remote: string | null): string | null {
+  const m = remote?.trim().match(/^(?:https?:\/\/(?:[^@/]+@)?|(?:ssh:\/\/)?git@)([^/:]+)[/:](?:\d+\/)?(.+?)(?:\.git)?\/?$/);
+  return m ? `https://${m[1]}/${m[2]}` : null;
+}
+
 export function collect(ctx: Context): Activity[] {
   const repos = ctx.cfg.repos.length ? ctx.cfg.repos : [{ path: process.cwd(), project: undefined as string | undefined }];
   const out: Activity[] = [];
@@ -24,6 +30,8 @@ export function collect(ctx: Context): Activity[] {
     const emails = new Set([ctx.user.email, git(repo.path, "config", "user.email")?.trim()].filter(Boolean) as string[]);
     if (!emails.size) continue;
     const name = path.basename(path.resolve(repo.path));
+    const base = webBase(git(repo.path, "remote", "get-url", "origin"));
+    // ponytail: GitHub/GitLab/Gitea path; Bitbucket uses /commits/, add when someone needs it
     const log = git(
       repo.path, "log", "--all", "--no-merges",
       `--since=${ctx.date} 00:00`, `--until=${nextDay(ctx.date)} 00:00`,
@@ -31,7 +39,7 @@ export function collect(ctx: Context): Activity[] {
     );
     for (const line of (log ?? "").split("\n").filter(Boolean)) {
       const [sha, when, subject] = line.split("\x1f");
-      out.push({ activity: subject, source: "git", sourceId: `${name}@${sha.slice(0, 10)}`, timestamp: when, group: name, project: repo.project ?? "" });
+      out.push({ activity: subject, source: "git", sourceId: `${name}@${sha.slice(0, 10)}`, timestamp: when, group: name, project: repo.project ?? "", url: base ? `${base}/commit/${sha}` : undefined });
     }
   }
   return out;

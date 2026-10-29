@@ -13,7 +13,7 @@ const CATEGORY: [RegExp, string][] = [
   [/\b(add|implement|feat|feature|build|create|support|integrat\w*)\b/i, "feature"],
 ];
 
-export interface Evidence { source: string; sourceId: string; activity: string; timestamp: string }
+export interface Evidence { source: string; sourceId: string; activity: string; timestamp: string; url?: string }
 export interface Entry {
   task_name: string; category: string; status: string; hours_spent: number; notes: string;
   source: string; source_id: string; ticket: number | null; product: number | null; project: string;
@@ -37,9 +37,17 @@ export interface Project { id: number; key: string; name: string }
 const fmt = (h: number) => { const m = Math.round(h * 60); return m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}` : `${m}m`; };
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+export const MAX_BACKFILL_DAYS = 7;
+export const MAX_MANUAL_HOURS = 12; // per line, when there is no attendance to cap against
+
+/** Whole days between two YYYY-MM-DD dates. */
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 864e5);
+
 export async function makeContext(crm: CRMClient, cfg: Config, date?: string): Promise<Context> {
   const me = await crm.me();
   const day = date || me.today;
+  if (daysBetween(day, me.today) > MAX_BACKFILL_DAYS) throw new Error(`${day} is more than ${MAX_BACKFILL_DAYS} days ago. Older days cannot be filed from here; ask a manager to add it in the CRM.`);
+  if (daysBetween(day, me.today) < 0) throw new Error(`${day} is in the future.`);
   const attendanceMinutes: number | null = (await crm.today(day)).attendance?.net_minutes ?? null;
   return { date: day, user: me, cfg, crm, attendanceMinutes };
 }
@@ -124,7 +132,7 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
 
   for (const acts of groups.values()) {
     const first = acts[0];
-    const evidence = acts.map((a) => ({ source: a.source, sourceId: a.sourceId, activity: a.activity, timestamp: a.timestamp }));
+    const evidence = acts.map((a) => ({ source: a.source, sourceId: a.sourceId, activity: a.activity, timestamp: a.timestamp, url: a.url }));
     let e: Entry;
     if (first.source === "git") {
       const subjects = [...acts].sort((a, b) => a.timestamp.localeCompare(b.timestamp)).map((a) => a.activity);
@@ -133,7 +141,7 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
         task_name: `${first.group}: ${subjects.slice(0, 3).join("; ")}${more}`.slice(0, 255),
         category: category(subjects.join(" ")), status: "completed",
         hours_spent: 0, minutes: activeMinutes(acts.map((a) => a.timestamp)),
-        notes: "Commits: " + acts.map((a) => a.sourceId.split("@").pop()).join(", "),
+        notes: "Commits:\n" + acts.map((a) => a.url ?? a.sourceId.split("@").pop()).join("\n"),
         source: "git", source_id: `${first.group}:${ctx.date}`, ticket: null, product: null, project: "", evidence,
       };
     } else {
@@ -175,11 +183,17 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
   const total = measured.reduce((n, e) => n + (e.minutes as number), 0);
   const cap = ctx.attendanceMinutes ?? null;
   const factor = cap !== null && total > cap && total > 0 ? cap / total : 1;
+  // Hours the user typed (overrides, extra lines) are capped at the day's attendance, or 12h without one.
+  const maxManual = cap !== null ? round2(cap / 60) : MAX_MANUAL_HOURS;
+  const manual = (e: Entry, h: number) => {
+    if (h > maxManual) warnings.push(`"${e.task_name}": ${h}h is more than the ${maxManual}h this day allows, so it was cut to ${maxManual}h.`);
+    return round2(Math.min(h, maxManual));
+  };
   for (const e of entries) {
     const fixed = opts.hours?.[e.source_id];
-    if (fixed !== undefined) e.hours_spent = round2(fixed);
+    if (fixed !== undefined) e.hours_spent = manual(e, fixed);
     else if (e.minutes !== null) e.hours_spent = toHours(e.minutes * factor);
-    else e.hours_spent = round2(e.hours_spent);
+    else e.hours_spent = manual(e, e.hours_spent);
   }
   if (byProject) {
     // Lines were measured and capped one by one above; now fold them per project. Exclusions and
@@ -187,7 +201,7 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
     entries = combineByProject(ctx.date, entries).filter((e) => !drop.has(e.source_id));
     for (const e of entries) {
       const fixed = opts.hours?.[e.source_id];
-      if (fixed !== undefined) e.hours_spent = round2(fixed);
+      if (fixed !== undefined) e.hours_spent = manual(e, fixed);
     }
   }
   return { id: randomUUID().slice(0, 8), date: ctx.date, entries, warnings, unmatched, previewed: false, attendanceMinutes: cap, scaledDown: factor < 1, overlaps: [] };
