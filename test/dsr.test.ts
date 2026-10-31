@@ -191,18 +191,14 @@ describe("real time", () => {
     assert.deepEqual(found.map((a) => a.sourceId), ["CRM-1"]);
   });
 
-  test("measured time is shrunk to fit attendance, and never inflated to fill it", () => {
+  test("measured time is not scaled to attendance", () => {
     const acts = [
       act("CRM-1 A: x", "CRM-1", { times: [at("09:00"), at("10:00")] }), // 80 min
       act("CRM-2 B: y", "CRM-2", { times: [at("11:00"), at("12:00")] }), // 80 min
     ];
-    const roomy = core.buildDraft({ ...ctxFor(new FakeCRM()), attendanceMinutes: 480 }, acts, PROJECTS);
-    assert.deepEqual(roomy.entries.map((e) => e.hours_spent), [1.33, 1.33]); // a whole day on attendance, still only what was measured
-    assert.equal(roomy.scaledDown, false);
     const tight = core.buildDraft({ ...ctxFor(new FakeCRM()), attendanceMinutes: 80 }, acts, PROJECTS);
-    assert.deepEqual(tight.entries.map((e) => e.hours_spent), [0.67, 0.67]); // 160 measured, 80 on attendance
-    assert.equal(tight.scaledDown, true);
-    assert.match(core.render(tight, ME), /scaled down to fit/);
+    assert.deepEqual(tight.entries.map((e) => e.hours_spent), [1.33, 1.33]);
+    assert.equal(tight.scaledDown, false);
   });
 
   test("a hour the user volunteers wins over the measurement", () => {
@@ -583,11 +579,11 @@ describe("guards", () => {
     await assert.rejects(core.makeContext(new FakeCRM(), { url: "", token: "", repos: [] }, "2026-10-09"), /future/);
     assert.equal((await core.makeContext(new FakeCRM(), { url: "", token: "", repos: [] }, "2026-10-01")).date, "2026-10-01");
   });
-  test("typed hours are cut to the attendance", async () => {
+  test("typed hours are not cut to the attendance", async () => {
     const crm = new FakeCRM(); crm.attendance = { net_minutes: 360 };
     const ctx = await core.makeContext(crm, { url: "", token: "", repos: [] });
     const d = core.buildDraft(ctx, [], PROJECTS, { extra: [{ activity: "x", hours: 20 }] });
-    assert.equal(d.entries[0].hours_spent, 6);
-    assert.ok(d.warnings.some((w) => /cut to 6h/.test(w)));
+    assert.equal(d.entries[0].hours_spent, 12); // only the 12h per-line sanity limit applies
+    assert.equal(core.buildDraft(ctx, [], PROJECTS, { extra: [{ activity: "x", hours: 7 }] }).entries[0].hours_spent, 7);
   });
 });

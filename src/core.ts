@@ -38,7 +38,7 @@ const fmt = (h: number) => { const m = Math.round(h * 60); return m >= 60 ? `${M
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export const MAX_BACKFILL_DAYS = 7;
-export const MAX_MANUAL_HOURS = 12; // per line, when there is no attendance to cap against
+export const MAX_MANUAL_HOURS = 12; // per line, a sanity limit on typed hours
 
 /** Whole days between two YYYY-MM-DD dates. */
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 864e5);
@@ -177,22 +177,15 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
   const drop = new Set(opts.exclude ?? []);
   entries = entries.filter((e) => !drop.has(e.source_id));
   const byProject = opts.group_by === "project";
-  // Measured lines can't add up to more than the day they happened in: shrink them to fit attendance.
-  // Never the other way: time nobody can show evidence for is left unreported, not invented.
-  const measured = entries.filter((e) => e.minutes !== null && opts.hours?.[e.source_id] === undefined);
-  const total = measured.reduce((n, e) => n + (e.minutes as number), 0);
-  const cap = ctx.attendanceMinutes ?? null;
-  const factor = cap !== null && total > cap && total > 0 ? cap / total : 1;
-  // Hours the user typed (overrides, extra lines) are capped at the day's attendance, or 12h without one.
-  const maxManual = cap !== null ? round2(cap / 60) : MAX_MANUAL_HOURS;
+  const maxManual = MAX_MANUAL_HOURS; // typed hours are not tied to attendance, only sanity-capped per line
   const manual = (e: Entry, h: number) => {
-    if (h > maxManual) warnings.push(`"${e.task_name}": ${h}h is more than the ${maxManual}h this day allows, so it was cut to ${maxManual}h.`);
+    if (h > maxManual) warnings.push(`"${e.task_name}": ${h}h is more than the ${maxManual}h per-line limit, so it was cut to ${maxManual}h.`);
     return round2(Math.min(h, maxManual));
   };
   for (const e of entries) {
     const fixed = opts.hours?.[e.source_id];
     if (fixed !== undefined) e.hours_spent = manual(e, fixed);
-    else if (e.minutes !== null) e.hours_spent = toHours(e.minutes * factor);
+    else if (e.minutes !== null) e.hours_spent = toHours(e.minutes);
     else e.hours_spent = manual(e, e.hours_spent);
   }
   if (byProject) {
@@ -204,7 +197,7 @@ export function buildDraft(ctx: Context, activities: Activity[], projects: Proje
       if (fixed !== undefined) e.hours_spent = manual(e, fixed);
     }
   }
-  return { id: randomUUID().slice(0, 8), date: ctx.date, entries, warnings, unmatched, previewed: false, attendanceMinutes: cap, scaledDown: factor < 1, overlaps: [] };
+  return { id: randomUUID().slice(0, 8), date: ctx.date, entries, warnings, unmatched, previewed: false, attendanceMinutes: ctx.attendanceMinutes ?? null, scaledDown: false, overlaps: [] };
 }
 
 /** Joins names with "; " and fits 255 chars, ending in "(+N more)" when some had to go. */

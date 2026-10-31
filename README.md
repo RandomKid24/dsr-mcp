@@ -35,7 +35,7 @@ You are never asked for hours. Each line's time is measured from when the work a
 
 - **Commits:** the times of your commits. Commits less than 90 minutes apart count as one work session (the time between them), and each session gets 20 minutes for the work before its first commit.
 - **Tickets:** the times you commented on, moved or assigned the ticket in the CRM, measured the same way.
-- **Capped by attendance:** the total can't be more than the time you were punched in. If it is, every line is scaled down to fit.
+- **Not capped by attendance:** the preview shows your attendance for reference, but hours are never scaled down to it.
 - **Never padded:** if you worked 7 hours but only 3 are visible in commits and tickets, the DSR shows 3. To add the rest, tell it ("add: client call, 1h"); that line is marked UNVERIFIED.
 - **Tickets with no activity today are left out.** Being assigned a ticket is not work done today.
 
@@ -49,7 +49,7 @@ Commits are listed in the DSR notes and in ticket descriptions as full links (`h
 
 - **Your own DSR only.** `dsr_update` refuses an entry that is not in your own DSR for that day. The CRM must enforce the same on its side.
 - **Days:** a DSR can be made for today or up to 7 days back, not the future.
-- **Typed hours are capped.** Hours you type ("make it 8 hours", "add: client call, 9h") are cut to that day's attendance, or to 12 hours when there is no attendance. You see a warning when this happens.
+- **Typed hours are capped.** Hours you type ("make it 8 hours", "add: client call, 9h") are cut to 12 hours per line. You see a warning when this happens.
 
 ## When a folder name is not the project name
 
@@ -160,8 +160,8 @@ It reads git commits from the folder your AI tool is open in. Open the tool in t
 | Tool says the server failed to start or `npx` not found | Run `which npx` (Windows: `where npx`) and put that full path in the config as the command. Common when Node comes from nvm. |
 | Browser didn't open for sign-in | The AI shows you the link. Open it yourself. |
 | "No activity found" | Open the tool in the project folder, or give the repo path. Only commits made by your own git email are counted, on today's date. |
-| Hours look low | Only work with evidence is counted (commits, ticket activity), and never more than your attendance. Say "make X 2 hours" or "add: standup, 30m" to change it. |
-| Hours look high | Lines are capped at your attendance time. If you did not punch in, only the measured time is used. |
+| Hours look low | Only work with evidence is counted (commits, ticket activity). Say "make X 2 hours" or "add: standup, 30m" to change it. |
+| Hours look high | Hours are the measured commit and ticket time, not limited by attendance. |
 | "Day is closed" | The CRM only accepts today's DSR. Past days are read-only except for admins. |
 | Need to sign in again | Delete `~/.config/dsr-mcp/config.json` and ask again. |
 | Updating to a new version | See [Updating to a new version](#updating-to-a-new-version): clear the `npx` cache, then run `setup` again. |
